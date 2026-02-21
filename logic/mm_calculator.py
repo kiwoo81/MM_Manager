@@ -91,10 +91,10 @@ class MMCalculator:
         if task is None:
             return False, "존재하지 않는 과제입니다."
 
-        if task.status == '대기':
+        if task.status == '미착수':
             return False, (
                 f"과제 '{task.name}'이(가) 아직 착수되지 않았습니다.\n"
-                "집행 MM은 착수 또는 완료 상태의 과제에만 입력할 수 있습니다."
+                "집행 MM은 착수 상태의 과제에만 입력할 수 있습니다."
             )
 
         # 근무지 불일치 검사

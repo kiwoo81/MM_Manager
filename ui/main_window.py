@@ -1,6 +1,7 @@
+import datetime
 from PySide6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QVBoxLayout,
-    QHBoxLayout, QTabBar, QSplitter, QGroupBox
+    QHBoxLayout, QSplitter, QGroupBox, QLabel, QComboBox
 )
 from PySide6.QtCore import Qt
 from database.db_manager import DBManager
@@ -18,24 +19,46 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("MM 관리 시스템")
         self.setMinimumSize(1000, 700)
         self.resize(1200, 800)
+        self._current_year = datetime.date.today().year
         self._build_ui()
 
     def _build_ui(self):
-        self.tabs = QTabWidget()
-        self.setCentralWidget(self.tabs)
+        central = QWidget()
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(6, 6, 6, 6)
+        main_layout.setSpacing(4)
+        self.setCentralWidget(central)
 
-        # ── 탭 1: 기준 정보 ────────────────────────────────────
+        # ── 전역 연도 선택 바 ────────────────────────────────────
+        year_bar = QHBoxLayout()
+        year_bar.addWidget(QLabel("연도:"))
+        self.year_combo = QComboBox()
+        now = datetime.date.today()
+        for y in range(now.year - 2, now.year + 3):
+            self.year_combo.addItem(str(y), y)
+        self.year_combo.setCurrentText(str(now.year))
+        self.year_combo.setFixedWidth(90)
+        year_bar.addWidget(self.year_combo)
+        year_bar.addStretch()
+        main_layout.addLayout(year_bar)
+
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs)
+
+        year = self._current_year
+
+        # ── 탭 1: 기준 정보 ─────────────────────────────────────
         base_widget = QWidget()
         base_layout = QHBoxLayout(base_widget)
 
         task_group = QGroupBox("과제 관리")
         tg_layout = QVBoxLayout(task_group)
-        self.task_widget = TaskWidget(self.db)
+        self.task_widget = TaskWidget(self.db, year=year)
         tg_layout.addWidget(self.task_widget)
 
         person_group = QGroupBox("인력 관리")
         pg_layout = QVBoxLayout(person_group)
-        self.person_widget = PersonWidget(self.db)
+        self.person_widget = PersonWidget(self.db, year=year)
         pg_layout.addWidget(self.person_widget)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -46,27 +69,38 @@ class MainWindow(QMainWindow):
 
         self.tabs.addTab(base_widget, "기준 정보")
 
-        # ── 탭 2: MM 계획 ──────────────────────────────────────
-        self.plan_widget = PlanWidget(self.db)
+        # ── 탭 2: MM 계획 ────────────────────────────────────────
+        self.plan_widget = PlanWidget(self.db, year=year)
         self.tabs.addTab(self.plan_widget, "MM 계획")
 
-        # ── 탭 3: MM 집행 ──────────────────────────────────────
-        self.exec_widget = ExecutionWidget(self.db)
+        # ── 탭 3: MM 집행 ────────────────────────────────────────
+        self.exec_widget = ExecutionWidget(self.db, year=year)
         self.tabs.addTab(self.exec_widget, "MM 집행")
 
-        # ── 탭 4: 현황 대시보드 ────────────────────────────────
-        self.dashboard_widget = DashboardWidget(self.db)
+        # ── 탭 4: 현황 대시보드 ──────────────────────────────────
+        self.dashboard_widget = DashboardWidget(self.db, year=year)
         self.tabs.addTab(self.dashboard_widget, "현황 대시보드")
 
-        # 데이터 변경 시 연계 갱신
+        # 신호 연결
         self.task_widget.tasks_changed.connect(self._on_data_changed)
         self.person_widget.persons_changed.connect(self._on_data_changed)
         self.plan_widget.data_changed.connect(self._on_data_changed)
         self.exec_widget.data_changed.connect(self._on_data_changed)
-
+        self.year_combo.currentIndexChanged.connect(self._on_year_changed)
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
+    def _on_year_changed(self):
+        year = self.year_combo.currentData()
+        self._current_year = year
+        self.task_widget.set_year(year)
+        self.person_widget.set_year(year)
+        self.plan_widget.set_year(year)
+        self.exec_widget.set_year(year)
+        self.dashboard_widget.set_year(year)
+
     def _on_data_changed(self):
+        self.task_widget.refresh()
+        self.person_widget.refresh()
         self.plan_widget.reload()
         self.exec_widget.reload()
         self.dashboard_widget.reload()

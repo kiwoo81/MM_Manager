@@ -68,6 +68,46 @@ class MMValidator(QValidator):
         return text
 
 
+class MMExecutionValidator(QValidator):
+    """집행 MM: 음수 포함 실수, 소수점 첫째 자리까지 허용."""
+
+    def validate(self, text: str, pos: int):
+        if text in ("", "-"):
+            return (QValidator.Intermediate, text, pos)
+
+        allowed = set("0123456789.-")
+        if any(c not in allowed for c in text):
+            return (QValidator.Invalid, text, pos)
+
+        if text.count(".") > 1:
+            return (QValidator.Invalid, text, pos)
+
+        if text.count("-") > 1 or ("-" in text and not text.startswith("-")):
+            return (QValidator.Invalid, text, pos)
+
+        if text.endswith("."):
+            try:
+                float(text[:-1])
+                return (QValidator.Intermediate, text, pos)
+            except ValueError:
+                return (QValidator.Invalid, text, pos)
+
+        try:
+            val = float(text)
+        except ValueError:
+            return (QValidator.Invalid, text, pos)
+
+        if "." in text and len(text.split(".")[1]) > 1:
+            return (QValidator.Invalid, text, pos)
+
+        return (QValidator.Acceptable, text, pos)
+
+    def fixup(self, text: str) -> str:
+        if text.endswith("."):
+            return text + "0"
+        return text
+
+
 class MMDelegate(QStyledItemDelegate):
     """
     셀 선택 후 숫자 키 즉시 편집.
@@ -126,3 +166,18 @@ class MMDelegate(QStyledItemDelegate):
             self._table.setCurrentIndex(idx)
             self._table.setFocus()
             self._table.scrollTo(idx)
+
+
+class MMExecutionDelegate(MMDelegate):
+    """집행 MM 전용 델리게이트 (음수 허용)."""
+
+    def createEditor(self, parent, option, index):
+        editor = MMLineEdit(parent)
+        editor.setValidator(MMExecutionValidator(editor))
+        editor.setAlignment(Qt.AlignCenter)
+
+        row, col = index.row(), index.column()
+        editor.arrow_pressed.connect(
+            lambda key: self._handle_arrow(editor, row, col, key)
+        )
+        return editor

@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
-    QTableWidgetItem, QLabel, QComboBox, QHeaderView,
+    QTableWidgetItem, QLabel, QHeaderView,
     QAbstractItemView, QMessageBox, QPushButton
 )
 from PySide6.QtCore import Qt, Signal
@@ -26,27 +26,25 @@ N_COLS        = 16
 class PlanWidget(QWidget):
     data_changed = Signal()
 
-    def __init__(self, db: DBManager, parent=None):
+    def __init__(self, db: DBManager, year: int = None, parent=None):
         super().__init__(parent)
         self.db = db
         self.calc = MMCalculator(db)
+        self.year = year or datetime.date.today().year
         self._tasks = []
         self._persons = []
         self._row_map = {}
         self._build_ui()
         self.refresh()
 
+    def set_year(self, year: int):
+        self.year = year
+        self.refresh()
+
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
         top_bar = QHBoxLayout()
-        top_bar.addWidget(QLabel("연도:"))
-        self.year_combo = QComboBox()
-        now = datetime.date.today()
-        for y in range(now.year - 2, now.year + 3):
-            self.year_combo.addItem(str(y), y)
-        self.year_combo.setCurrentIndex(2)
-        top_bar.addWidget(self.year_combo)
         top_bar.addStretch()
         self.reset_btn = QPushButton("전체 초기화")
         self.reset_btn.setStyleSheet(
@@ -56,7 +54,6 @@ class PlanWidget(QWidget):
         )
         self.reset_btn.clicked.connect(self._reset_all)
         top_bar.addWidget(self.reset_btn)
-        self.year_combo.currentIndexChanged.connect(self.refresh)
 
         self.table = MMTableWidget()
         # 셀 선택 후 숫자 키 입력 즉시 편집
@@ -75,9 +72,9 @@ class PlanWidget(QWidget):
     # ──────────────────────────────────────────────────────────────────────────
 
     def refresh(self):
-        self._tasks = self.db.get_all_tasks()
-        self._persons = self.db.get_all_persons()
-        year = self.year_combo.currentData()
+        self._tasks = self.db.get_all_tasks(self.year)
+        self._persons = self.db.get_all_persons(self.year)
+        year = self.year
 
         plan_map = {}
         for month in range(1, 13):
@@ -267,7 +264,7 @@ class PlanWidget(QWidget):
 
         _, person_id, task_id = row_info
         month = c - COL_JAN + 1
-        year = self.year_combo.currentData()
+        year = self.year
 
         # 근무지 불일치 안전 체크
         _person = self.db.get_person(person_id)
@@ -306,7 +303,7 @@ class PlanWidget(QWidget):
         self.data_changed.emit()
 
     def _reset_all(self):
-        year = self.year_combo.currentData()
+        year = self.year
         reply = QMessageBox.question(
             self.window(), "전체 초기화",
             f"{year}년 MM 계획 데이터를 모두 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.",

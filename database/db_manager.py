@@ -1,14 +1,13 @@
 import sqlite3
 import os
+import datetime
 from typing import List, Optional
 from .models import Task, Person, MMPlan, MMExecution, TaskLocationMM
 
 
 def get_db_path() -> str:
-    home = os.path.expanduser("~")
-    data_dir = os.path.join(home, ".mm_manager")
-    os.makedirs(data_dir, exist_ok=True)
-    return os.path.join(data_dir, "mm_manager.db")
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_dir, "mm_manager.db")
 
 
 class DBManager:
@@ -23,24 +22,30 @@ class DBManager:
         return conn
 
     def _init_db(self):
+        current_year = datetime.date.today().year
         with self._connect() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS tasks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    year INTEGER NOT NULL DEFAULT 0,
                     name TEXT NOT NULL,
                     description TEXT DEFAULT '',
                     total_mm REAL NOT NULL DEFAULT 0.0,
-                    status TEXT NOT NULL DEFAULT '대기',
+                    status TEXT NOT NULL DEFAULT '미착수',
                     start_year INTEGER,
                     start_month INTEGER,
                     end_year INTEGER,
-                    end_month INTEGER
+                    end_month INTEGER,
+                    is_active INTEGER NOT NULL DEFAULT 1
                 );
 
                 CREATE TABLE IF NOT EXISTS persons (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    year INTEGER NOT NULL DEFAULT 0,
                     name TEXT NOT NULL,
-                    department TEXT DEFAULT ''
+                    department TEXT DEFAULT '',
+                    location TEXT DEFAULT '',
+                    is_active INTEGER NOT NULL DEFAULT 1
                 );
 
                 CREATE TABLE IF NOT EXISTS mm_plan (
@@ -71,22 +76,42 @@ class DBManager:
                     allocated_mm REAL NOT NULL DEFAULT 0.0,
                     UNIQUE(task_id, location)
                 );
+
+                CREATE TABLE IF NOT EXISTS execution_month_locks (
+                    year INTEGER NOT NULL,
+                    month INTEGER NOT NULL,
+                    PRIMARY KEY (year, month)
+                );
             """)
             # tasks 테이블 마이그레이션
             existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
             for col in ('start_year', 'start_month', 'end_year', 'end_month'):
                 if col not in existing_cols:
                     conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} INTEGER")
+            if 'is_active' not in existing_cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+            if 'year' not in existing_cols:
+                conn.execute(f"ALTER TABLE tasks ADD COLUMN year INTEGER NOT NULL DEFAULT {current_year}")
             # persons 테이블 마이그레이션
             existing_person_cols = {row[1] for row in conn.execute("PRAGMA table_info(persons)").fetchall()}
             if 'location' not in existing_person_cols:
                 conn.execute("ALTER TABLE persons ADD COLUMN location TEXT DEFAULT ''")
+            if 'is_active' not in existing_person_cols:
+                conn.execute("ALTER TABLE persons ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+            if 'year' not in existing_person_cols:
+                conn.execute(f"ALTER TABLE persons ADD COLUMN year INTEGER NOT NULL DEFAULT {current_year}")
+            # status 마이그레이션: '대기' → '미착수', '완료' → '착수'
+            conn.execute("UPDATE tasks SET status='미착수' WHERE status='대기'")
+            conn.execute("UPDATE tasks SET status='착수' WHERE status='완료'")
 
     # ─── Tasks ────────────────────────────────────────────────────────────────
 
-    def get_all_tasks(self) -> List[Task]:
+    def get_all_tasks(self, year: int = None) -> List[Task]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM tasks ORDER BY id").fetchall()
+            if year is not None:
+                rows = conn.execute("SELECT * FROM tasks WHERE year=? ORDER BY id", (year,)).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM tasks ORDER BY id").fetchall()
             return [Task(**dict(r)) for r in rows]
 
     def get_task(self, task_id: int) -> Optional[Task]:
@@ -97,9 +122,9 @@ class DBManager:
     def add_task(self, task: Task) -> int:
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT INTO tasks (name, description, total_mm, status, "
-                "start_year, start_month, end_year, end_month) VALUES (?,?,?,?,?,?,?,?)",
-                (task.name, task.description, task.total_mm, task.status,
+                "INSERT INTO tasks (year, name, description, total_mm, status, "
+                "start_year, start_month, end_year, end_month) VALUES (?,?,?,?,?,?,?,?,?)",
+                (task.year, task.name, task.description, task.total_mm, task.status,
                  task.start_year, task.start_month, task.end_year, task.end_month)
             )
             return cur.lastrowid
@@ -120,9 +145,12 @@ class DBManager:
 
     # ─── Persons ──────────────────────────────────────────────────────────────
 
-    def get_all_persons(self) -> List[Person]:
+    def get_all_persons(self, year: int = None) -> List[Person]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM persons ORDER BY id").fetchall()
+            if year is not None:
+                rows = conn.execute("SELECT * FROM persons WHERE year=? ORDER BY id", (year,)).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM persons ORDER BY id").fetchall()
             return [Person(**dict(r)) for r in rows]
 
     def get_person(self, person_id: int) -> Optional[Person]:
@@ -133,8 +161,8 @@ class DBManager:
     def add_person(self, person: Person) -> int:
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT INTO persons (name, department, location) VALUES (?,?,?)",
-                (person.name, person.department, person.location)
+                "INSERT INTO persons (year, name, department, location) VALUES (?,?,?,?)",
+                (person.year, person.name, person.department, person.location)
             )
             return cur.lastrowid
 
@@ -260,6 +288,19 @@ class DBManager:
             ).fetchone()
             return row[0]
 
+    def get_task_execution_totals_by_location(self, task_id: int) -> dict:
+        """과제의 근무지별 집행 MM 합계. {location: total_mm}"""
+        with self._connect() as conn:
+            rows = conn.execute("""
+                SELECT COALESCE(per.location, '') as location,
+                       COALESCE(SUM(e.actual_mm), 0) as total
+                FROM mm_execution e
+                JOIN persons per ON e.person_id = per.id
+                WHERE e.task_id = ?
+                GROUP BY per.location
+            """, (task_id,)).fetchall()
+            return {r[0]: r[1] for r in rows}
+
     def get_task_plan_total(self, task_id: int) -> float:
         with self._connect() as conn:
             row = conn.execute(
@@ -362,17 +403,51 @@ class DBManager:
             """, (task_id, location)).fetchone()
             return row[0]
 
-    def get_all_location_plan_totals(self) -> dict:
+    def get_all_location_plan_totals(self, year: int = None) -> dict:
         """근무지별 전체 계획 MM 합계. {location: total_planned_mm}"""
         with self._connect() as conn:
-            rows = conn.execute("""
-                SELECT per.location, COALESCE(SUM(p.planned_mm), 0)
-                FROM mm_plan p
-                JOIN persons per ON per.id = p.person_id
-                WHERE per.location != ''
-                GROUP BY per.location
-            """).fetchall()
+            if year is not None:
+                rows = conn.execute("""
+                    SELECT per.location, COALESCE(SUM(p.planned_mm), 0)
+                    FROM mm_plan p
+                    JOIN persons per ON per.id = p.person_id
+                    JOIN tasks t ON t.id = p.task_id
+                    WHERE t.year = ? AND per.location != ''
+                    GROUP BY per.location
+                """, (year,)).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT per.location, COALESCE(SUM(p.planned_mm), 0)
+                    FROM mm_plan p
+                    JOIN persons per ON per.id = p.person_id
+                    WHERE per.location != ''
+                    GROUP BY per.location
+                """).fetchall()
             return {r[0]: r[1] for r in rows}
+
+    # ─── Execution Month Locks ────────────────────────────────────────────────
+
+    def get_locked_months(self, year: int) -> set:
+        """해당 연도에서 잠긴 월 집합 반환."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT month FROM execution_month_locks WHERE year=?", (year,)
+            ).fetchall()
+            return {r[0] for r in rows}
+
+    def set_month_lock(self, year: int, month: int, locked: bool):
+        """월 잠금 설정/해제."""
+        with self._connect() as conn:
+            if locked:
+                conn.execute(
+                    "INSERT OR IGNORE INTO execution_month_locks (year, month) VALUES (?,?)",
+                    (year, month)
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM execution_month_locks WHERE year=? AND month=?",
+                    (year, month)
+                )
 
     def get_all_locations(self) -> List[str]:
         """persons 테이블에 등록된 고유 근무지 목록."""

@@ -294,7 +294,7 @@ class TaskDialog(QDialog):
                 return
         self.accept()
 
-    def get_task(self, task_id=None) -> Task:
+    def get_task(self, task_id=None, year=None) -> Task:
         if self.period_group.isChecked():
             sy = self.start_year.value()
             sm = self.start_month.currentData()
@@ -307,6 +307,7 @@ class TaskDialog(QDialog):
 
         return Task(
             id=task_id,
+            year=year or datetime.date.today().year,
             name=self.name_edit.text().strip(),
             description=self.desc_edit.toPlainText().strip(),
             total_mm=total_mm,
@@ -319,10 +320,15 @@ class TaskDialog(QDialog):
 class TaskWidget(QWidget):
     tasks_changed = Signal()
 
-    def __init__(self, db: DBManager, parent=None):
+    def __init__(self, db: DBManager, year: int = None, parent=None):
         super().__init__(parent)
         self.db = db
+        self.year = year or datetime.date.today().year
         self._build_ui()
+        self.refresh()
+
+    def set_year(self, year: int):
+        self.year = year
         self.refresh()
 
     def _build_ui(self):
@@ -367,7 +373,7 @@ class TaskWidget(QWidget):
         layout.addWidget(self.task_summary_label)
 
     def refresh(self):
-        tasks = self.db.get_all_tasks()
+        tasks = self.db.get_all_tasks(self.year)
         self.table.setRowCount(len(tasks))
 
         loc_totals = {}  # {location: total_mm} (insertion order 유지)
@@ -420,17 +426,33 @@ class TaskWidget(QWidget):
             loc_parts = [f"{loc}: {int(v)}MM" for loc, v in loc_totals.items()]
             summary = "  /  ".join(loc_parts) + f"   |   총합계: {int(grand_total)}MM"
             # 근무지별 계획 MM이 필요 MM과 모두 일치하면 초록색
-            loc_planned = self.db.get_all_location_plan_totals()
-            all_match = all(
-                abs(loc_planned.get(loc, 0.0) - v) < 1e-9
-                for loc, v in loc_totals.items()
-            ) and abs(sum(loc_planned.get(loc, 0.0) for loc in loc_totals) - grand_total) < 1e-9
+            loc_planned = self.db.get_all_location_plan_totals(self.year)
+            tooltip_lines = ["[근무지별 필요 MM vs 계획 MM]"]
+            all_match = True
+            for loc, req in loc_totals.items():
+                plan = loc_planned.get(loc, 0.0)
+                match = abs(plan - req) < 0.05
+                if not match:
+                    all_match = False
+                icon = "✓" if match else "✗"
+                tooltip_lines.append(
+                    f"  {icon} {loc}: 필요 {int(req)}MM / 계획 {plan:.1f}MM"
+                    + ("" if match else f"  (차이: {plan - req:+.1f}MM)")
+                )
+            total_plan = sum(loc_planned.get(loc, 0.0) for loc in loc_totals)
+            if abs(total_plan - grand_total) >= 0.05:
+                all_match = False
+            tooltip_lines.append(
+                f"  {'✓' if all_match else '✗'} 총합계: 필요 {int(grand_total)}MM / 계획 {total_plan:.1f}MM"
+            )
+            self.task_summary_label.setToolTip("\n".join(tooltip_lines))
             self.task_summary_label.setStyleSheet(
                 _SUMMARY_STYLE_OK if all_match else _SUMMARY_STYLE_WARN
             )
         else:
             summary = f"계획된 총 MM 합계: {int(grand_total)}MM"
             self.task_summary_label.setStyleSheet(_SUMMARY_STYLE_WARN)
+            self.task_summary_label.setToolTip("")
         self.task_summary_label.setText(summary)
         self._on_selection_changed()
 
@@ -447,7 +469,7 @@ class TaskWidget(QWidget):
     def _add_task(self):
         dlg = TaskDialog(self, db=self.db)
         if dlg.exec() == QDialog.Accepted:
-            task_id = self.db.add_task(dlg.get_task())
+            task_id = self.db.add_task(dlg.get_task(year=self.year))
             self.db.replace_task_location_mms(task_id, dlg.get_location_mms())
             self.refresh()
             self.tasks_changed.emit()
@@ -456,11 +478,12 @@ class TaskWidget(QWidget):
         task_id = self._selected_task_id()
         if task_id is None:
             return
-        dlg = TaskDialog(self, self.db.get_task(task_id), db=self.db)
+        existing = self.db.get_task(task_id)
+        dlg = TaskDialog(self, existing, db=self.db)
         if focus_col is not None:
             dlg._focus_col = focus_col
         if dlg.exec() == QDialog.Accepted:
-            self.db.update_task(dlg.get_task(task_id))
+            self.db.update_task(dlg.get_task(task_id, year=existing.year))
             self.db.replace_task_location_mms(task_id, dlg.get_location_mms())
             self.db.delete_location_mismatched_plans(task_id=task_id)
             self.refresh()

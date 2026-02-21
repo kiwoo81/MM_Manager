@@ -1,63 +1,63 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
-    QTableWidgetItem, QLabel, QComboBox, QHeaderView,
-    QAbstractItemView, QMessageBox
+    QTableWidgetItem, QLabel, QHeaderView,
+    QAbstractItemView, QMessageBox, QPushButton
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QBrush, QFont
 from database.db_manager import DBManager
 from database.models import MMExecution
 from logic.mm_calculator import MMCalculator
-from ui.mm_delegate import MMDelegate, MMTableWidget
+from ui.mm_delegate import MMExecutionDelegate, MMTableWidget
 import datetime
 
 MONTH_NAMES = ['1월','2월','3월','4월','5월','6월',
                '7월','8월','9월','10월','11월','12월']
 
-COL_PERSON = 0
-COL_TASK   = 1
-COL_JAN    = 2
-COL_DEC    = 13
-COL_TOTAL  = 14
-N_COLS     = 15
+COL_PERSON    = 0
+COL_TASK      = 1
+COL_JAN       = 2
+COL_DEC       = 13
+COL_TOTAL     = 14
+COL_LOC_TOTAL = 15
+N_COLS        = 16
+
+LOCK_ROW = 0  # 잠금 버튼 행 (항상 첫 번째 행)
 
 
 class ExecutionWidget(QWidget):
     data_changed = Signal()
 
-    def __init__(self, db: DBManager, parent=None):
+    def __init__(self, db: DBManager, year: int = None, parent=None):
         super().__init__(parent)
         self.db = db
         self.calc = MMCalculator(db)
+        self.year = year or datetime.date.today().year
         self._tasks = []
         self._persons = []
         self._row_map = {}
         self._build_ui()
         self.refresh()
 
+    def set_year(self, year: int):
+        self.year = year
+        self.refresh()
+
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
         top_bar = QHBoxLayout()
-        top_bar.addWidget(QLabel("연도:"))
-        self.year_combo = QComboBox()
-        now = datetime.date.today()
-        for y in range(now.year - 2, now.year + 3):
-            self.year_combo.addItem(str(y), y)
-        self.year_combo.setCurrentIndex(2)
-        top_bar.addWidget(self.year_combo)
         top_bar.addStretch()
-        self.year_combo.currentIndexChanged.connect(self.refresh)
 
         self.table = MMTableWidget()
         self.table.setEditTriggers(QAbstractItemView.AnyKeyPressed)
         self.table.setSelectionBehavior(QAbstractItemView.SelectItems)
-        self.table.setItemDelegate(MMDelegate(self.table))
+        self.table.setItemDelegate(MMExecutionDelegate(self.table))
         self.table.itemChanged.connect(self._on_item_changed)
 
         layout.addLayout(top_bar)
         layout.addWidget(QLabel(
-            "※ 셀 선택 후 숫자 입력 (0.0~1.0, 소수점 1자리). "
+            "※ 셀 선택 후 숫자 입력 (음수 포함, 소수점 1자리). "
             "착수/완료 과제에만 입력 가능. 미착수 과제 셀은 회색 비활성화. "
             "계획합계: 파랑 / 집행합계: 초록=달성, 주황=부분, 빨강=초과"
         ))
@@ -66,9 +66,10 @@ class ExecutionWidget(QWidget):
     # ──────────────────────────────────────────────────────────────────────────
 
     def refresh(self):
-        self._tasks = self.db.get_all_tasks()
-        self._persons = self.db.get_all_persons()
-        year = self.year_combo.currentData()
+        self._tasks = self.db.get_all_tasks(self.year)
+        self._persons = self.db.get_all_persons(self.year)
+        year = self.year
+        self._locked_months = self.db.get_locked_months(year)
 
         exec_map = {}  # (person_id, task_id, month) -> actual_mm
         for month in range(1, 13):
@@ -81,18 +82,40 @@ class ExecutionWidget(QWidget):
             for p in self.db.get_plans_by_month(year, month):
                 plan_map[(p.person_id, p.task_id, month)] = p.planned_mm
 
-        active_task_ids = {t.id for t in self._tasks if t.status in ('착수', '완료')}
+        active_task_ids = {t.id for t in self._tasks if t.status == '착수'}
 
-        # 과제별 허용 근무지 집합 (항목 없으면 제한 없음)
-        task_location_sets = {}
+        # 과제별 근무지 할당 MM: {task_id: {loc: allocated_mm}}
+        task_loc_mms: dict[int, dict[str, float]] = {}
         for task in self._tasks:
             locs = self.db.get_task_location_mms(task.id)
             if locs:
-                task_location_sets[task.id] = {lm.location for lm in locs}
-        self._task_location_sets = task_location_sets
+                task_loc_mms[task.id] = {lm.location: lm.allocated_mm for lm in locs}
+        self._task_location_sets = {tid: set(locs.keys()) for tid, locs in task_loc_mms.items()}
 
         # 인력별 근무지
         person_location = {p.id: p.location for p in self._persons}
+
+        # 근무지별 연간 계획/집행 합계 (선택 연도 기준)
+        loc_plan_annual: dict[str, float] = {}
+        for (pid, tid, m), val in plan_map.items():
+            loc = person_location.get(pid, "")
+            if loc:
+                loc_plan_annual[loc] = loc_plan_annual.get(loc, 0.0) + val
+        loc_exec_annual: dict[str, float] = {}
+        for (pid, tid, m), val in exec_map.items():
+            loc = person_location.get(pid, "")
+            if loc:
+                loc_exec_annual[loc] = loc_exec_annual.get(loc, 0.0) + val
+
+        # 과제+근무지별 연간 집행 합계: {(task_id, loc): total_exec}
+        task_loc_exec: dict[tuple, float] = {}
+        for (pid, tid, m), val in exec_map.items():
+            loc = person_location.get(pid, "")
+            if loc:
+                task_loc_exec[(tid, loc)] = task_loc_exec.get((tid, loc), 0.0) + val
+
+        # 전체 근무지 목록 (요약 행 표시용, 인력 입력 순서 유지)
+        all_locs = list(dict.fromkeys(p.location for p in self._persons if p.location))
 
         n_tasks = len(self._tasks)
         n_persons = len(self._persons)
@@ -101,23 +124,59 @@ class ExecutionWidget(QWidget):
         self.table.clearSpans()
         self.table.setRowCount(0)
 
-        # 행 수: 각 인력당 (과제 수 + 계획합계 행 + 집행합계 행)
-        total_rows = n_persons * (n_tasks + 2)
+        # 행 수: 잠금 행(1) + 각 인력당 (과제 수 + 계획합계 행 + 집행합계 행)
+        total_rows = 1 + n_persons * (n_tasks + 2)
         self.table.setRowCount(total_rows)
         self.table.setColumnCount(N_COLS)
 
         self.table.setHorizontalHeaderLabels(
-            ['인력', '과제'] + MONTH_NAMES + ['연간합계']
+            ['인력', '과제'] + MONTH_NAMES + ['연간합계', '근무지합계']
         )
         self.table.setColumnWidth(COL_PERSON, 80)
         self.table.setColumnWidth(COL_TASK, 120)
         for c in range(COL_JAN, COL_DEC + 1):
             self.table.setColumnWidth(c, 55)
         self.table.setColumnWidth(COL_TOTAL, 75)
+        self.table.setColumnWidth(COL_LOC_TOTAL, 150)
         self.table.horizontalHeader().setSectionResizeMode(COL_TASK, QHeaderView.Stretch)
 
+        # ── 잠금 행 (row 0) ────────────────────────────────────────────────
+        self.table.setRowHeight(LOCK_ROW, 30)
+        for col in [COL_PERSON, COL_TOTAL, COL_LOC_TOTAL]:
+            placeholder = QTableWidgetItem("")
+            placeholder.setFlags(Qt.ItemIsEnabled)
+            placeholder.setBackground(QBrush(QColor("#263238")))
+            self.table.setItem(LOCK_ROW, col, placeholder)
+        lock_label = QTableWidgetItem("월 잠금")
+        lock_label.setFlags(Qt.ItemIsEnabled)
+        lock_label.setTextAlignment(Qt.AlignCenter)
+        lock_label.setBackground(QBrush(QColor("#263238")))
+        lock_label.setForeground(QBrush(QColor("#90a4ae")))
+        font = QFont(); font.setBold(True)
+        lock_label.setFont(font)
+        self.table.setItem(LOCK_ROW, COL_TASK, lock_label)
+        for m_idx in range(12):
+            month = m_idx + 1
+            is_locked = month in self._locked_months
+            btn = QPushButton("🔒" if is_locked else "🔓")
+            btn.setToolTip(f"{month}월 잠금 {'해제' if is_locked else '설정'}")
+            if is_locked:
+                btn.setStyleSheet(
+                    "QPushButton { background-color: #b71c1c; color: white; "
+                    "font-size: 14px; border: none; }"
+                    "QPushButton:hover { background-color: #d32f2f; }"
+                )
+            else:
+                btn.setStyleSheet(
+                    "QPushButton { background-color: #37474f; color: #78909c; "
+                    "font-size: 14px; border: none; }"
+                    "QPushButton:hover { background-color: #455a64; color: #cfd8dc; }"
+                )
+            btn.clicked.connect(lambda checked, m=month: self._toggle_month_lock(m))
+            self.table.setCellWidget(LOCK_ROW, COL_JAN + m_idx, btn)
+
         self._row_map = {}
-        row = 0
+        row = 1  # LOCK_ROW(0) 다음부터 시작
 
         for person in self._persons:
             person_start_row = row
@@ -127,9 +186,9 @@ class ExecutionWidget(QWidget):
                 is_active = task.id in active_task_ids
 
                 # 근무지 일치 여부: 과제에 근무지 제한이 있고 인력 근무지가 불일치하면 False
-                if task.id in task_location_sets:
+                if task.id in self._task_location_sets:
                     p_loc = person_location.get(person.id, "")
-                    is_loc_match = bool(p_loc) and p_loc in task_location_sets[task.id]
+                    is_loc_match = bool(p_loc) and p_loc in self._task_location_sets[task.id]
                 else:
                     is_loc_match = True
 
@@ -159,20 +218,12 @@ class ExecutionWidget(QWidget):
                     if not task.in_range(year, month):
                         cell = _out_of_range_item()
                     elif not is_active:
-                        cell = QTableWidgetItem(f"{mm:.1f}" if mm else "")
-                        cell.setTextAlignment(Qt.AlignCenter)
-                        cell.setFlags(Qt.ItemIsEnabled)
-                        cell.setBackground(QBrush(QColor("#e0e0e0")))
-                        cell.setForeground(QBrush(QColor("#9e9e9e")))
-                        cell.setToolTip(f"'{task.name}'은(는) 아직 착수되지 않았습니다.")
+                        cell = _inactive_item(task.name)
                     elif not is_loc_match:
-                        task_locs = " / ".join(sorted(task_location_sets.get(task.id, set())))
-                        cell = QTableWidgetItem("")
-                        cell.setTextAlignment(Qt.AlignCenter)
-                        cell.setFlags(Qt.ItemIsEnabled)
-                        cell.setBackground(QBrush(QColor("#ede7f6")))
-                        cell.setForeground(QBrush(QColor("#9e9e9e")))
-                        cell.setToolTip(f"이 과제는 '{task_locs}' 근무지 인력만 집행할 수 있습니다.")
+                        task_locs = " / ".join(sorted(self._task_location_sets.get(task.id, set())))
+                        cell = _loc_mismatch_item(task_locs)
+                    elif month in self._locked_months:
+                        cell = _locked_item(f"{mm:.1f}" if mm else "")
                     else:
                         cell = QTableWidgetItem(f"{mm:.1f}" if mm else "")
                         cell.setTextAlignment(Qt.AlignCenter)
@@ -184,6 +235,31 @@ class ExecutionWidget(QWidget):
                     row, COL_TOTAL,
                     _readonly_item(f"{annual:.1f}" if annual else "")
                 )
+                loc_map = task_loc_mms.get(task.id, {})
+                if loc_map:
+                    parts, tip_lines, is_over = [], [], False
+                    for loc in loc_map.keys():
+                        allocated = loc_map[loc]
+                        executed = task_loc_exec.get((task.id, loc), 0.0)
+                        parts.append(f"{loc}: {executed:.1f}")
+                        diff = executed - allocated
+                        tip_lines.append(
+                            f"{loc}  할당: {int(allocated)} / 집행: {executed:.1f}"
+                            + (f" (초과 +{diff:.1f})" if diff > 1e-9 else f" (잔여 {-diff:.1f})")
+                        )
+                        if diff > 1e-9:
+                            is_over = True
+                    loc_cell = QTableWidgetItem(" / ".join(parts))
+                    loc_cell.setTextAlignment(Qt.AlignCenter)
+                    loc_cell.setFlags(Qt.ItemIsEnabled)
+                    font = QFont(); font.setBold(True)
+                    loc_cell.setFont(font)
+                    loc_cell.setToolTip("\n".join(tip_lines))
+                    loc_cell.setBackground(QBrush(QColor("#c62828") if is_over else QColor("#546e7a")))
+                    loc_cell.setForeground(QBrush(QColor("#ffffff")))
+                    self.table.setItem(row, COL_LOC_TOTAL, loc_cell)
+                else:
+                    self.table.setItem(row, COL_LOC_TOTAL, _disabled_summary_item())
                 row += 1
 
             # ── 계획합계 행 ─────────────────────────────────────────────
@@ -197,16 +273,28 @@ class ExecutionWidget(QWidget):
             person_plan_monthly = []
             plan_annual = 0.0
             for m_idx in range(12):
+                month_p = m_idx + 1
                 monthly_plan = sum(
-                    plan_map.get((person.id, t.id, m_idx + 1), 0.0)
+                    plan_map.get((person.id, t.id, month_p), 0.0)
                     for t in self._tasks
                 )
                 person_plan_monthly.append(monthly_plan)
                 plan_annual += monthly_plan
                 pitem = _plan_item(f"{monthly_plan:.1f}" if monthly_plan else "")
+                # 툴팁: 과제별 계획 내역
+                task_details = [
+                    f"  {t.name}: {plan_map.get((person.id, t.id, month_p), 0.0):.1f}MM"
+                    for t in self._tasks
+                    if plan_map.get((person.id, t.id, month_p), 0.0) > 1e-9
+                ]
+                if task_details:
+                    pitem.setToolTip(f"[{month_p}월 계획 내역]\n" + "\n".join(task_details))
+                if month_p in self._locked_months:
+                    pitem.setBackground(QBrush(QColor("#78909c")))
                 self.table.setItem(row, COL_JAN + m_idx, pitem)
 
             self.table.setItem(row, COL_TOTAL, _plan_item(f"{plan_annual:.1f}" if plan_annual else ""))
+            self.table.setItem(row, COL_LOC_TOTAL, _disabled_summary_item())
             row += 1
 
             # ── 집행합계 행 ─────────────────────────────────────────────
@@ -219,16 +307,43 @@ class ExecutionWidget(QWidget):
 
             exec_annual = 0.0
             for m_idx in range(12):
+                month_e = m_idx + 1
                 monthly_exec = sum(
-                    exec_map.get((person.id, t.id, m_idx + 1), 0.0)
+                    exec_map.get((person.id, t.id, month_e), 0.0)
                     for t in self._tasks
                 )
                 monthly_plan = person_plan_monthly[m_idx]
                 exec_annual += monthly_exec
                 mitem = _exec_compare_item(monthly_exec, monthly_plan)
+                if month_e in self._locked_months:
+                    mitem.setBackground(QBrush(QColor("#78909c")))
                 self.table.setItem(row, COL_JAN + m_idx, mitem)
 
             self.table.setItem(row, COL_TOTAL, _readonly_item(f"{exec_annual:.1f}" if exec_annual else ""))
+            if all_locs:
+                le_parts, le_tips, le_over = [], [], False
+                for loc in all_locs:
+                    plan_v = loc_plan_annual.get(loc, 0.0)
+                    exec_v = loc_exec_annual.get(loc, 0.0)
+                    le_parts.append(f"{loc}: {exec_v:.1f}")
+                    diff = exec_v - plan_v
+                    le_tips.append(
+                        f"{loc}  계획: {plan_v:.1f} / 집행: {exec_v:.1f}"
+                        + (f" (초과 +{diff:.1f})" if diff > 1e-9 else "")
+                    )
+                    if exec_v > plan_v + 1e-9:
+                        le_over = True
+                le_cell = QTableWidgetItem(" / ".join(le_parts))
+                le_cell.setTextAlignment(Qt.AlignCenter)
+                le_cell.setFlags(Qt.ItemIsEnabled)
+                font = QFont(); font.setBold(True)
+                le_cell.setFont(font)
+                le_cell.setToolTip("\n".join(le_tips))
+                le_cell.setBackground(QBrush(QColor("#c62828") if le_over else QColor("#546e7a")))
+                le_cell.setForeground(QBrush(QColor("#ffffff")))
+                self.table.setItem(row, COL_LOC_TOTAL, le_cell)
+            else:
+                self.table.setItem(row, COL_LOC_TOTAL, _disabled_summary_item())
             row += 1
 
         self.table.blockSignals(False)
@@ -245,7 +360,17 @@ class ExecutionWidget(QWidget):
 
         _, person_id, task_id = row_info
         month = c - COL_JAN + 1
-        year = self.year_combo.currentData()
+        year = self.year
+
+        # 잠긴 월 보호
+        if month in self._locked_months:
+            self._restore_cell(r, c, task_id, person_id, year, month)
+            QMessageBox.warning(
+                self.window(), "월 잠금",
+                f"{month}월은 잠겨 있어 수정할 수 없습니다.\n"
+                "잠금을 해제하려면 상단의 🔒 버튼을 클릭하세요."
+            )
+            return
 
         task = self.db.get_task(task_id)
         if task and not task.in_range(year, month):
@@ -304,6 +429,12 @@ class ExecutionWidget(QWidget):
         )
         self.table.blockSignals(False)
 
+    def _toggle_month_lock(self, month: int):
+        year = self.year
+        is_locked = month in self._locked_months
+        self.db.set_month_lock(year, month, not is_locked)
+        self.refresh()
+
     def reload(self):
         self.refresh()
 
@@ -318,6 +449,28 @@ def _out_of_range_item() -> QTableWidgetItem:
     item.setBackground(QBrush(QColor("#cfd8dc")))
     item.setForeground(QBrush(QColor("#78909c")))
     item.setToolTip("과제 기간 외 월입니다.")
+    return item
+
+
+def _inactive_item(task_name: str) -> QTableWidgetItem:
+    """미착수 과제 셀 (— 기호, 회색)."""
+    item = QTableWidgetItem("—")
+    item.setTextAlignment(Qt.AlignCenter)
+    item.setFlags(Qt.ItemIsEnabled)
+    item.setBackground(QBrush(QColor("#e0e0e0")))
+    item.setForeground(QBrush(QColor("#9e9e9e")))
+    item.setToolTip(f"'{task_name}'은(는) 아직 착수되지 않았습니다.")
+    return item
+
+
+def _loc_mismatch_item(task_locs: str) -> QTableWidgetItem:
+    """근무지 불일치 셀 (× 기호, 연보라)."""
+    item = QTableWidgetItem("×")
+    item.setTextAlignment(Qt.AlignCenter)
+    item.setFlags(Qt.ItemIsEnabled)
+    item.setBackground(QBrush(QColor("#eceff1")))
+    item.setForeground(QBrush(QColor("#b0bec5")))
+    item.setToolTip(f"배정 근무지 아님 (배정: {task_locs})")
     return item
 
 
@@ -366,6 +519,25 @@ def _readonly_item(text: str) -> QTableWidgetItem:
     item.setForeground(QBrush(QColor("#ffffff")))
     font = QFont(); font.setBold(True)
     item.setFont(font)
+    return item
+
+
+def _locked_item(text: str) -> QTableWidgetItem:
+    """잠긴 월 셀 (편집 불가, 회색)."""
+    item = QTableWidgetItem(text)
+    item.setTextAlignment(Qt.AlignCenter)
+    item.setFlags(Qt.ItemIsEnabled)
+    item.setBackground(QBrush(QColor("#b0bec5")))
+    item.setForeground(QBrush(QColor("#455a64")))
+    item.setToolTip("🔒 잠긴 월 — 편집 불가")
+    return item
+
+
+def _disabled_summary_item() -> QTableWidgetItem:
+    """근무지합계 컬럼의 데이터 행 비활성 셀."""
+    item = QTableWidgetItem("")
+    item.setFlags(Qt.ItemIsEnabled)
+    item.setBackground(QBrush(QColor("#eceff1")))
     return item
 
 

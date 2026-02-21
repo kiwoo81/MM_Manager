@@ -5,18 +5,20 @@ from typing import Optional
 @dataclass
 class Task:
     id: Optional[int]
+    year: int
     name: str
     description: str
     total_mm: float
-    status: str  # '대기', '착수', '완료'
+    status: str  # '미착수', '착수'
     start_year: Optional[int] = None
     start_month: Optional[int] = None
     end_year: Optional[int] = None
     end_month: Optional[int] = None
+    is_active: int = 1
 
     @staticmethod
     def statuses():
-        return ['대기', '착수', '완료']
+        return ['미착수', '착수']
 
     def in_range(self, year: int, month: int) -> bool:
         """해당 년월이 과제 기간 내에 있으면 True. 기간 미설정 시 항상 True."""
@@ -30,9 +32,11 @@ class Task:
 @dataclass
 class Person:
     id: Optional[int]
+    year: int
     name: str
     department: str
     location: str = ""
+    is_active: int = 1
 
 
 @dataclass
