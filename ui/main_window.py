@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QSplitter, QGroupBox, QLabel, QComboBox
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIntValidator
 from database.db_manager import DBManager
 from ui.task_widget import TaskWidget
 from ui.person_widget import PersonWidget
@@ -33,10 +34,13 @@ class MainWindow(QMainWindow):
         year_bar = QHBoxLayout()
         year_bar.addWidget(QLabel("연도:"))
         self.year_combo = QComboBox()
+        self.year_combo.setEditable(True)
+        self.year_combo.setInsertPolicy(QComboBox.NoInsert)
         now = datetime.date.today()
-        for y in range(now.year - 2, now.year + 3):
+        for y in range(now.year - 5, now.year + 6):
             self.year_combo.addItem(str(y), y)
         self.year_combo.setCurrentText(str(now.year))
+        self.year_combo.lineEdit().setValidator(QIntValidator(2000, 2100))
         self.year_combo.setFixedWidth(90)
         year_bar.addWidget(self.year_combo)
         year_bar.addStretch()
@@ -87,10 +91,26 @@ class MainWindow(QMainWindow):
         self.plan_widget.data_changed.connect(self._on_data_changed)
         self.exec_widget.data_changed.connect(self._on_data_changed)
         self.year_combo.currentIndexChanged.connect(self._on_year_changed)
+        self.year_combo.lineEdit().editingFinished.connect(self._on_year_edited)
         self.tabs.currentChanged.connect(self._on_tab_changed)
+
+    def _on_year_edited(self):
+        text = self.year_combo.lineEdit().text().strip()
+        if text.isdigit() and 2000 <= int(text) <= 2100:
+            year = int(text)
+            if self.year_combo.findText(text) == -1:
+                self.year_combo.addItem(text, year)
+            self.year_combo.setCurrentText(text)
+            self._apply_year(year)
 
     def _on_year_changed(self):
         year = self.year_combo.currentData()
+        if year is None:
+            return
+        self._current_year = year
+        self._apply_year(year)
+
+    def _apply_year(self, year: int):
         self._current_year = year
         self.task_widget.set_year(year)
         self.person_widget.set_year(year)

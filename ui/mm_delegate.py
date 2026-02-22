@@ -8,13 +8,27 @@ class MMTableWidget(QTableWidget):
 
     def keyPressEvent(self, event):
         idx = self.currentIndex()
-        if idx.isValid() and event.text():
+        if idx.isValid():
             item = self.item(idx.row(), idx.column())
             is_editable = item is not None and bool(item.flags() & Qt.ItemIsEditable)
-            if not is_editable:
+
+            if event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
+                if is_editable and item.text():
+                    r, c = idx.row(), idx.column()
+                    item.setText("")
+                    QTimer.singleShot(0, lambda r=r, c=c: self._restore_selection(r, c))
                 event.accept()
                 return
+
+            if event.text() and not is_editable:
+                event.accept()
+                return
+
         super().keyPressEvent(event)
+
+    def _restore_selection(self, row: int, col: int):
+        if row < self.rowCount() and col < self.columnCount():
+            self.setCurrentCell(row, col)
 
 
 class MMLineEdit(QLineEdit):

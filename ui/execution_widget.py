@@ -95,17 +95,24 @@ class ExecutionWidget(QWidget):
         # 인력별 근무지
         person_location = {p.id: p.location for p in self._persons}
 
-        # 근무지별 연간 계획/집행 합계 (선택 연도 기준)
+        # 근무지별 월별/연간 계획/집행 합계 (선택 연도 기준)
         loc_plan_annual: dict[str, float] = {}
+        loc_plan_monthly: dict[str, dict[int, float]] = {}
         for (pid, tid, m), val in plan_map.items():
             loc = person_location.get(pid, "")
             if loc:
                 loc_plan_annual[loc] = loc_plan_annual.get(loc, 0.0) + val
+                month_dict = loc_plan_monthly.setdefault(loc, {})
+                month_dict[m] = month_dict.get(m, 0.0) + val
+
         loc_exec_annual: dict[str, float] = {}
+        loc_exec_monthly: dict[str, dict[int, float]] = {}
         for (pid, tid, m), val in exec_map.items():
             loc = person_location.get(pid, "")
             if loc:
                 loc_exec_annual[loc] = loc_exec_annual.get(loc, 0.0) + val
+                month_dict = loc_exec_monthly.setdefault(loc, {})
+                month_dict[m] = month_dict.get(m, 0.0) + val
 
         # 과제+근무지별 연간 집행 합계: {(task_id, loc): total_exec}
         task_loc_exec: dict[tuple, float] = {}
@@ -119,13 +126,14 @@ class ExecutionWidget(QWidget):
 
         n_tasks = len(self._tasks)
         n_persons = len(self._persons)
+        n_summary_rows = (1 + len(all_locs) * 2) if all_locs else 0
 
         self.table.blockSignals(True)
         self.table.clearSpans()
         self.table.setRowCount(0)
 
-        # 행 수: 잠금 행(1) + 각 인력당 (과제 수 + 계획합계 행 + 집행합계 행)
-        total_rows = 1 + n_persons * (n_tasks + 2)
+        # 행 수: 잠금 행(1) + 각 인력당 (과제 수 + 계획합계 행 + 집행합계 행) + 하단 근무지 요약
+        total_rows = 1 + n_persons * (n_tasks + 2) + n_summary_rows
         self.table.setRowCount(total_rows)
         self.table.setColumnCount(N_COLS)
 
@@ -345,6 +353,62 @@ class ExecutionWidget(QWidget):
             else:
                 self.table.setItem(row, COL_LOC_TOTAL, _disabled_summary_item())
             row += 1
+
+        # ── 근무지별 계획/집행 합계 (하단 요약) ────────────────────────────
+        if all_locs:
+            # 구분선 행
+            sep_label = QTableWidgetItem("근무지별 계획 / 집행 합계")
+            sep_label.setFlags(Qt.ItemIsEnabled)
+            sep_label.setTextAlignment(Qt.AlignCenter)
+            sep_label.setBackground(QBrush(QColor("#263238")))
+            sep_label.setForeground(QBrush(QColor("#90a4ae")))
+            font = QFont(); font.setBold(True)
+            sep_label.setFont(font)
+            self.table.setSpan(row, 0, 1, N_COLS)
+            self.table.setItem(row, 0, sep_label)
+            self.table.setRowHeight(row, 24)
+            row += 1
+
+            for loc in all_locs:
+                pm = loc_plan_monthly.get(loc, {})
+                em = loc_exec_monthly.get(loc, {})
+
+                # 근무지 이름 셀 (계획/집행 2행 span)
+                loc_name_item = QTableWidgetItem(loc)
+                loc_name_item.setFlags(Qt.ItemIsEnabled)
+                loc_name_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+                _apply_header_style(loc_name_item)
+                self.table.setItem(row, COL_PERSON, loc_name_item)
+                self.table.setSpan(row, COL_PERSON, 2, 1)
+
+                # 계획 행
+                plan_label = QTableWidgetItem("계획")
+                plan_label.setFlags(Qt.ItemIsEnabled)
+                _apply_plan_style(plan_label)
+                self.table.setItem(row, COL_TASK, plan_label)
+                plan_annual = 0.0
+                for m_idx in range(12):
+                    val = pm.get(m_idx + 1, 0.0)
+                    plan_annual += val
+                    self.table.setItem(row, COL_JAN + m_idx, _plan_item(f"{val:.1f}" if val else ""))
+                self.table.setItem(row, COL_TOTAL, _plan_item(f"{plan_annual:.1f}" if plan_annual else ""))
+                self.table.setItem(row, COL_LOC_TOTAL, _disabled_summary_item())
+                row += 1
+
+                # 집행 행
+                exec_label = QTableWidgetItem("집행")
+                exec_label.setFlags(Qt.ItemIsEnabled)
+                _apply_total_style(exec_label)
+                self.table.setItem(row, COL_TASK, exec_label)
+                exec_annual = 0.0
+                for m_idx in range(12):
+                    exec_val = em.get(m_idx + 1, 0.0)
+                    plan_val = pm.get(m_idx + 1, 0.0)
+                    exec_annual += exec_val
+                    self.table.setItem(row, COL_JAN + m_idx, _exec_compare_item(exec_val, plan_val))
+                self.table.setItem(row, COL_TOTAL, _readonly_item(f"{exec_annual:.1f}" if exec_annual else ""))
+                self.table.setItem(row, COL_LOC_TOTAL, _disabled_summary_item())
+                row += 1
 
         self.table.blockSignals(False)
 
