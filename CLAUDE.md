@@ -56,6 +56,9 @@ MM_Manager/
 3. 집행 MM은 음수 허용 (조정 입력용)
 4. 과제의 `total_mm`은 지역별 MM 합계로 자동 계산 (직접 입력 없음)
 5. 과제·인력은 연도별로 독립 관리 (2025년 데이터와 2026년 데이터는 완전히 분리)
+6. 인력별 `available_mm`: 기본값 12.0, 0.5 단위 입력 (Person 모델 필드)
+7. MM 계획 잠금: plan_widget 전체 잠금 토글 (plan_locks 테이블, year PK)
+8. MM 집행 월 잠금: 1월부터 순서대로만 잠금 가능, 역순으로만 해제 가능 (locked_months 테이블)
 
 ## 연도별 독립 아키텍처
 - `tasks`, `persons` 테이블에 `year` 컬럼 존재
@@ -76,6 +79,18 @@ shiboken6 내부 재귀로 인해 세그폴트 발생.
 - loc_table의 MM 컬럼: 0 이상 정수만 허용 (`QIntValidator(0, 999999)`)
 - plan 위젯: `MMDelegate` — 0.0~1.0, 소수점 1자리
 - execution 위젯: `MMExecutionDelegate` — 음수 포함 실수, 소수점 1자리
+- person dialog의 `available_mm`: `QDoubleSpinBox` 사용 (dialog 내 사용은 세그폴트 없음, cellWidget만 위험)
+
+### 집행 셀 색상 규칙
+- 일반(계획 있음): 흰 배경
+- 계획 없는 집행 (편집 가능): `#f57f17` 황색
+- 잠긴 월 + 계획 없는 집행: `#e65100` 진한 주황
+- 잠긴 월 + 계획 있는 집행: `#b0bec5` 회색
+
+### 요약 라벨 색상 규칙 (task_widget, person_widget 공통)
+- 근무지별 MM AND 총합 모두 일치 → `#e8f5e9` 초록
+- 하나라도 불일치 → `#fff3e0` 주황
+- 근무지 목록: 오름차순 정렬
 
 ### MMTableWidget 키보드 동작
 - `Backspace` / `Delete`: 편집 가능 셀 값 즉시 삭제 후 해당 셀 선택 유지
