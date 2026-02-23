@@ -36,6 +36,7 @@ class Person:
     name: str
     department: str
     location: str = ""
+    available_mm: float = 12.0
     is_active: int = 1
 
 

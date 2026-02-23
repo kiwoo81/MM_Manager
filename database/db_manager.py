@@ -82,6 +82,10 @@ class DBManager:
                     month INTEGER NOT NULL,
                     PRIMARY KEY (year, month)
                 );
+
+                CREATE TABLE IF NOT EXISTS plan_locks (
+                    year INTEGER PRIMARY KEY
+                );
             """)
             # tasks 테이블 마이그레이션
             existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
@@ -100,6 +104,8 @@ class DBManager:
                 conn.execute("ALTER TABLE persons ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
             if 'year' not in existing_person_cols:
                 conn.execute(f"ALTER TABLE persons ADD COLUMN year INTEGER NOT NULL DEFAULT {current_year}")
+            if 'available_mm' not in existing_person_cols:
+                conn.execute("ALTER TABLE persons ADD COLUMN available_mm REAL NOT NULL DEFAULT 12.0")
             # status 마이그레이션: '대기' → '미착수', '완료' → '착수'
             conn.execute("UPDATE tasks SET status='미착수' WHERE status='대기'")
             conn.execute("UPDATE tasks SET status='착수' WHERE status='완료'")
@@ -161,16 +167,16 @@ class DBManager:
     def add_person(self, person: Person) -> int:
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT INTO persons (year, name, department, location) VALUES (?,?,?,?)",
-                (person.year, person.name, person.department, person.location)
+                "INSERT INTO persons (year, name, department, location, available_mm) VALUES (?,?,?,?,?)",
+                (person.year, person.name, person.department, person.location, person.available_mm)
             )
             return cur.lastrowid
 
     def update_person(self, person: Person):
         with self._connect() as conn:
             conn.execute(
-                "UPDATE persons SET name=?, department=?, location=? WHERE id=?",
-                (person.name, person.department, person.location, person.id)
+                "UPDATE persons SET name=?, department=?, location=?, available_mm=? WHERE id=?",
+                (person.name, person.department, person.location, person.available_mm, person.id)
             )
 
     def delete_person(self, person_id: int):
@@ -449,10 +455,40 @@ class DBManager:
                     (year, month)
                 )
 
+    # ─── Plan Locks ───────────────────────────────────────────────────────────
+
+    def get_plan_locked(self, year: int) -> bool:
+        """해당 연도 MM 계획 잠금 여부."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM plan_locks WHERE year=?", (year,)
+            ).fetchone()
+            return row is not None
+
+    def set_plan_locked(self, year: int, locked: bool):
+        """MM 계획 잠금 설정/해제."""
+        with self._connect() as conn:
+            if locked:
+                conn.execute("INSERT OR IGNORE INTO plan_locks (year) VALUES (?)", (year,))
+            else:
+                conn.execute("DELETE FROM plan_locks WHERE year=?", (year,))
+
     def get_all_locations(self) -> List[str]:
-        """persons 테이블에 등록된 고유 근무지 목록."""
+        """persons 및 task_location_mm 테이블의 고유 근무지 목록."""
+        with self._connect() as conn:
+            rows = conn.execute("""
+                SELECT DISTINCT location FROM (
+                    SELECT location FROM persons WHERE location != ''
+                    UNION
+                    SELECT location FROM task_location_mm WHERE location != ''
+                ) ORDER BY location
+            """).fetchall()
+            return [r[0] for r in rows]
+
+    def get_all_departments(self) -> List[str]:
+        """persons 테이블에 등록된 고유 부서 목록."""
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT DISTINCT location FROM persons WHERE location != '' ORDER BY location"
+                "SELECT DISTINCT department FROM persons WHERE department != '' ORDER BY department"
             ).fetchall()
             return [r[0] for r in rows]

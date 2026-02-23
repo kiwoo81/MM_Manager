@@ -2,7 +2,7 @@ import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QDialog, QFormLayout, QLineEdit, QComboBox,
-    QDialogButtonBox, QMessageBox, QHeaderView, QLabel
+    QDialogButtonBox, QMessageBox, QHeaderView, QLabel, QDoubleSpinBox
 )
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
@@ -26,7 +26,17 @@ class PersonDialog(QDialog):
         layout = QFormLayout(self)
 
         self.name_edit = QLineEdit()
-        self.dept_edit = QLineEdit()
+
+        # 부서: 기존 부서 선택 또는 직접 입력
+        self.dept_edit = QComboBox()
+        self.dept_edit.setEditable(True)
+        self.dept_edit.setInsertPolicy(QComboBox.NoInsert)
+        self.dept_edit.lineEdit().setPlaceholderText("예: 개발1팀, 연구소")
+        if db:
+            for dept in db.get_all_departments():
+                self.dept_edit.addItem(dept)
+        self.dept_edit.insertItem(0, "")
+        self.dept_edit.setCurrentIndex(0)
 
         # 근무지: 기존 근무지 선택 또는 직접 입력
         self.loc_edit = QComboBox()
@@ -40,9 +50,18 @@ class PersonDialog(QDialog):
         self.loc_edit.insertItem(0, "")
         self.loc_edit.setCurrentIndex(0)
 
+        # 가용 MM: 0.5 단위, 0.5~12.0, 기본값 12.0
+        self.mm_spin = QDoubleSpinBox()
+        self.mm_spin.setRange(0.5, 12.0)
+        self.mm_spin.setSingleStep(0.5)
+        self.mm_spin.setDecimals(1)
+        self.mm_spin.setValue(12.0)
+        self.mm_spin.setSuffix(" MM")
+
         layout.addRow("이름 *", self.name_edit)
         layout.addRow("부서", self.dept_edit)
         layout.addRow("근무지", self.loc_edit)
+        layout.addRow("가용 MM", self.mm_spin)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._accept)
@@ -51,8 +70,9 @@ class PersonDialog(QDialog):
 
         if person:
             self.name_edit.setText(person.name)
-            self.dept_edit.setText(person.department)
+            self.dept_edit.setCurrentText(person.department)
             self.loc_edit.setCurrentText(person.location)
+            self.mm_spin.setValue(person.available_mm)
 
     def focus_field(self, col: int):
         """테이블 열 번호에 해당하는 입력 필드에 포커스 및 전체 선택."""
@@ -61,7 +81,7 @@ class PersonDialog(QDialog):
             self.name_edit.selectAll()
         elif col == 2:
             self.dept_edit.setFocus()
-            self.dept_edit.selectAll()
+            self.dept_edit.lineEdit().selectAll()
         elif col == 3:
             self.loc_edit.setFocus()
             self.loc_edit.lineEdit().selectAll()
@@ -77,8 +97,9 @@ class PersonDialog(QDialog):
             id=person_id,
             year=year or datetime.date.today().year,
             name=self.name_edit.text().strip(),
-            department=self.dept_edit.text().strip(),
+            department=self.dept_edit.currentText().strip(),
             location=self.loc_edit.currentText().strip(),
+            available_mm=self.mm_spin.value(),
         )
 
 
@@ -115,14 +136,15 @@ class PersonWidget(QWidget):
         self.delete_btn.clicked.connect(self._delete_person)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["ID", "이름", "부서", "근무지"])
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["ID", "이름", "부서", "근무지", "가용MM"])
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setColumnWidth(0, 50)
         self.table.setColumnWidth(3, 100)
+        self.table.setColumnWidth(4, 70)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
         self.table.doubleClicked.connect(lambda idx: self._edit_person(idx.column()))
 
@@ -143,48 +165,66 @@ class PersonWidget(QWidget):
             self.table.setItem(row, 1, QTableWidgetItem(person.name))
             self.table.setItem(row, 2, QTableWidgetItem(person.department))
             self.table.setItem(row, 3, QTableWidgetItem(person.location))
+            mm_item = QTableWidgetItem(f"{person.available_mm:g}")
+            mm_item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(row, 4, mm_item)
 
-        # 하단 요약: 근무지별 할당 MM 합계 + 총합계
-        loc_totals = {}
-        grand_total = 0.0
+        # 하단 요약: 인력 기반 가용 MM (인원별 available_mm 합산)
+        loc_available: dict[str, float] = {}
+        for p in persons:
+            if p.location:
+                loc_available[p.location] = loc_available.get(p.location, 0.0) + p.available_mm
+
+        total_available = sum(p.available_mm for p in persons)
+
+        # 과제 필요 MM (툴팁 비교용)
+        loc_required = {}
+        grand_required = 0.0
         for task in self.db.get_all_tasks(self.year):
             loc_mms = self.db.get_task_location_mms(task.id)
             if loc_mms:
                 for lm in loc_mms:
-                    if lm.location not in loc_totals:
-                        loc_totals[lm.location] = 0.0
-                    loc_totals[lm.location] += lm.allocated_mm
-            grand_total += task.total_mm
+                    loc_required[lm.location] = loc_required.get(lm.location, 0.0) + lm.allocated_mm
+            grand_required += task.total_mm
 
-        if loc_totals:
-            loc_parts = [f"{loc}: {int(v)}MM" for loc, v in loc_totals.items()]
-            summary = "총 필요 MM  " + "  /  ".join(loc_parts) + f"   |   총합계: {int(grand_total)}MM"
-            # 근무지별 계획 MM이 필요 MM과 모두 일치하면 초록색
-            loc_planned = self.db.get_all_location_plan_totals(self.year)
-            tooltip_lines = ["[근무지별 필요 MM vs 계획 MM]"]
+        if persons:
+            if loc_available:
+                avail_parts = [
+                    f"{loc}: {avail:g}MM"
+                    for loc, avail in sorted(loc_available.items())
+                ]
+                summary = "인력 가용 MM  " + "  /  ".join(avail_parts) + f"   |   총합계: {total_available:g}MM"
+            else:
+                summary = f"인력 가용 MM: {total_available:g}MM (근무지 미지정)"
+
+            tooltip_lines = ["[근무지별 가용 MM vs 과제 필요 MM]"]
             all_match = True
-            for loc, req in loc_totals.items():
-                plan = loc_planned.get(loc, 0.0)
-                match = abs(plan - req) < 0.05
+            for loc, avail in sorted(loc_available.items()):
+                req = loc_required.get(loc, 0.0)
+                match = abs(avail - req) < 0.05
                 if not match:
                     all_match = False
                 icon = "✓" if match else "✗"
+                diff = avail - req
+                diff_str = f"  (+{diff:.1f}MM)" if diff > 0.05 else (f"  (-{abs(diff):.1f}MM)" if diff < -0.05 else "")
                 tooltip_lines.append(
-                    f"  {icon} {loc}: 필요 {int(req)}MM / 계획 {plan:.1f}MM"
-                    + ("" if match else f"  (차이: {plan - req:+.1f}MM)")
+                    f"  {icon} {loc}: 가용 {avail}MM / 필요 {int(req)}MM{diff_str}"
                 )
-            total_plan = sum(loc_planned.get(loc, 0.0) for loc in loc_totals)
-            if abs(total_plan - grand_total) >= 0.05:
+            match_total = abs(total_available - grand_required) < 0.05
+            if not match_total:
                 all_match = False
+            diff_total = total_available - grand_required
+            diff_total_str = f"  (+{diff_total:.1f}MM)" if diff_total > 0.05 else (f"  (-{abs(diff_total):.1f}MM)" if diff_total < -0.05 else "")
             tooltip_lines.append(
-                f"  {'✓' if all_match else '✗'} 총합계: 필요 {int(grand_total)}MM / 계획 {total_plan:.1f}MM"
+                f"  {'✓' if match_total else '✗'} 총합계: 가용 {total_available}MM / 필요 {int(grand_required)}MM{diff_total_str}"
             )
+
             self.person_summary_label.setToolTip("\n".join(tooltip_lines))
             self.person_summary_label.setStyleSheet(
                 _SUMMARY_STYLE_OK if all_match else _SUMMARY_STYLE_WARN
             )
         else:
-            summary = f"총 필요 MM: {int(grand_total)}MM"
+            summary = "등록된 인력 없음"
             self.person_summary_label.setStyleSheet(_SUMMARY_STYLE_WARN)
             self.person_summary_label.setToolTip("")
         self.person_summary_label.setText(summary)

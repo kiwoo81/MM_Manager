@@ -421,38 +421,42 @@ class TaskWidget(QWidget):
             status_item.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row, 5, status_item)
 
-        # 하단 요약 레이블
+        # 하단 요약 레이블: 과제 필요 MM vs 인력 가용 MM 비교
+        persons = self.db.get_all_persons(self.year)
+        loc_available: dict[str, float] = {}
+        for p in persons:
+            if p.location:
+                loc_available[p.location] = loc_available.get(p.location, 0.0) + p.available_mm
+        total_available = sum(p.available_mm for p in persons)
+
         if loc_totals:
-            loc_parts = [f"{loc}: {int(v)}MM" for loc, v in loc_totals.items()]
-            summary = "  /  ".join(loc_parts) + f"   |   총합계: {int(grand_total)}MM"
-            # 근무지별 계획 MM이 필요 MM과 모두 일치하면 초록색
-            loc_planned = self.db.get_all_location_plan_totals(self.year)
-            tooltip_lines = ["[근무지별 필요 MM vs 계획 MM]"]
-            all_match = True
-            for loc, req in loc_totals.items():
-                plan = loc_planned.get(loc, 0.0)
-                match = abs(plan - req) < 0.05
-                if not match:
-                    all_match = False
-                icon = "✓" if match else "✗"
-                tooltip_lines.append(
-                    f"  {icon} {loc}: 필요 {int(req)}MM / 계획 {plan:.1f}MM"
-                    + ("" if match else f"  (차이: {plan - req:+.1f}MM)")
-                )
-            total_plan = sum(loc_planned.get(loc, 0.0) for loc in loc_totals)
-            if abs(total_plan - grand_total) >= 0.05:
-                all_match = False
-            tooltip_lines.append(
-                f"  {'✓' if all_match else '✗'} 총합계: 필요 {int(grand_total)}MM / 계획 {total_plan:.1f}MM"
-            )
-            self.task_summary_label.setToolTip("\n".join(tooltip_lines))
-            self.task_summary_label.setStyleSheet(
-                _SUMMARY_STYLE_OK if all_match else _SUMMARY_STYLE_WARN
-            )
+            loc_parts = [f"{loc}: {int(v)}MM" for loc, v in sorted(loc_totals.items())]
+            summary = "과제 필요 MM  " + "  /  ".join(loc_parts) + f"   |   총합계: {int(grand_total)}MM"
         else:
-            summary = f"계획된 총 MM 합계: {int(grand_total)}MM"
-            self.task_summary_label.setStyleSheet(_SUMMARY_STYLE_WARN)
-            self.task_summary_label.setToolTip("")
+            summary = f"과제 필요 MM  총합계: {int(grand_total)}MM"
+
+        all_locs = set(loc_totals.keys()) | set(loc_available.keys())
+        all_match = True
+        tooltip_lines = ["[근무지별 과제 필요 MM vs 인력 가용 MM]"]
+        for loc in sorted(all_locs):
+            req = loc_totals.get(loc, 0.0)
+            avail = loc_available.get(loc, 0.0)
+            match = abs(req - avail) < 0.05
+            if not match:
+                all_match = False
+            icon = "✓" if match else "✗"
+            diff = avail - req
+            diff_str = f"  (+{diff:.1f}MM)" if diff > 0.05 else (f"  (-{abs(diff):.1f}MM)" if diff < -0.05 else "")
+            tooltip_lines.append(f"  {icon} {loc}: 필요 {int(req)}MM / 가용 {avail:g}MM{diff_str}")
+        match_total = abs(grand_total - total_available) < 0.05
+        if not match_total:
+            all_match = False
+        diff_t = total_available - grand_total
+        diff_t_str = f"  (+{diff_t:.1f}MM)" if diff_t > 0.05 else (f"  (-{abs(diff_t):.1f}MM)" if diff_t < -0.05 else "")
+        tooltip_lines.append(f"  {'✓' if match_total else '✗'} 총합계: 필요 {int(grand_total)}MM / 가용 {total_available:g}MM{diff_t_str}")
+
+        self.task_summary_label.setToolTip("\n".join(tooltip_lines))
+        self.task_summary_label.setStyleSheet(_SUMMARY_STYLE_OK if all_match else _SUMMARY_STYLE_WARN)
         self.task_summary_label.setText(summary)
         self._on_selection_changed()
 

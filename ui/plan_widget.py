@@ -34,6 +34,7 @@ class PlanWidget(QWidget):
         self._tasks = []
         self._persons = []
         self._row_map = {}
+        self._locked = False
         self._build_ui()
         self.refresh()
 
@@ -46,6 +47,12 @@ class PlanWidget(QWidget):
 
         top_bar = QHBoxLayout()
         top_bar.addStretch()
+
+        self.lock_btn = QPushButton("계획 잠금")
+        self.lock_btn.setCheckable(True)
+        self.lock_btn.clicked.connect(self._toggle_lock)
+        top_bar.addWidget(self.lock_btn)
+
         self.reset_btn = QPushButton("전체 초기화")
         self.reset_btn.setStyleSheet(
             "QPushButton { background-color: #c62828; color: white; font-weight: bold; "
@@ -72,6 +79,8 @@ class PlanWidget(QWidget):
     # ──────────────────────────────────────────────────────────────────────────
 
     def refresh(self):
+        self._locked = self.db.get_plan_locked(self.year)
+        self._apply_lock_ui()
         self._tasks = self.db.get_all_tasks(self.year)
         self._persons = self.db.get_all_persons(self.year)
         year = self.year
@@ -140,8 +149,8 @@ class PlanWidget(QWidget):
                     pi = QTableWidgetItem(name_text)
                     pi.setFlags(Qt.ItemIsEnabled)
                     pi.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
-                    if person_annual >= 12.0 - 1e-9:
-                        pi.setBackground(QBrush(QColor("#2e7d32")))  # 12MM 완전 할당: 초록
+                    if person_annual >= person.available_mm - 1e-9:
+                        pi.setBackground(QBrush(QColor("#2e7d32")))  # 가용MM 완전 할당: 초록
                     else:
                         pi.setBackground(QBrush(QColor("#455a64")))  # 기본: 청회색
                     pi.setForeground(QBrush(QColor("#ffffff")))
@@ -242,9 +251,9 @@ class PlanWidget(QWidget):
                 self.table.setItem(row, COL_JAN + m_idx, mitem)
 
             annual_item = self._readonly_item(f"{person_annual:.1f}" if person_annual else "")
-            if person_annual > 12.0 + 1e-9:
+            if person_annual > person.available_mm + 1e-9:
                 annual_item.setBackground(QBrush(QColor("#c62828")))
-            elif abs(person_annual - 12.0) < 1e-9:
+            elif abs(person_annual - person.available_mm) < 1e-9:
                 annual_item.setBackground(QBrush(QColor("#2e7d32")))
             self.table.setItem(row, COL_TOTAL, annual_item)
             self.table.setItem(row, COL_REMAINING, self._readonly_item(""))
@@ -254,7 +263,36 @@ class PlanWidget(QWidget):
 
     # ──────────────────────────────────────────────────────────────────────────
 
+    def _toggle_lock(self):
+        self._locked = not self._locked
+        self.db.set_plan_locked(self.year, self._locked)
+        self._apply_lock_ui()
+
+    def _apply_lock_ui(self):
+        if self._locked:
+            self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            self.reset_btn.setEnabled(False)
+            self.lock_btn.setChecked(True)
+            self.lock_btn.setText("잠금 해제")
+            self.lock_btn.setStyleSheet(
+                "QPushButton { background-color: #e65100; color: white; font-weight: bold; "
+                "padding: 4px 12px; border-radius: 4px; }"
+                "QPushButton:hover { background-color: #bf360c; }"
+            )
+        else:
+            self.table.setEditTriggers(QAbstractItemView.AnyKeyPressed)
+            self.reset_btn.setEnabled(True)
+            self.lock_btn.setChecked(False)
+            self.lock_btn.setText("계획 잠금")
+            self.lock_btn.setStyleSheet(
+                "QPushButton { background-color: #1565c0; color: white; font-weight: bold; "
+                "padding: 4px 12px; border-radius: 4px; }"
+                "QPushButton:hover { background-color: #0d47a1; }"
+            )
+
     def _on_item_changed(self, item: QTableWidgetItem):
+        if self._locked:
+            return
         r, c = item.row(), item.column()
         if c < COL_JAN or c > COL_DEC:
             return

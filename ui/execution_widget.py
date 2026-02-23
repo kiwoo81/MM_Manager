@@ -59,7 +59,7 @@ class ExecutionWidget(QWidget):
         layout.addWidget(QLabel(
             "※ 셀 선택 후 숫자 입력 (음수 포함, 소수점 1자리). "
             "착수/완료 과제에만 입력 가능. 미착수 과제 셀은 회색 비활성화. "
-            "계획합계: 파랑 / 집행합계: 초록=달성, 주황=부분, 빨강=초과"
+            "황색=계획 없는 집행 / 계획합계: 파랑 / 집행합계: 초록=달성, 주황=부분, 빨강=초과"
         ))
         layout.addWidget(self.table)
 
@@ -163,23 +163,45 @@ class ExecutionWidget(QWidget):
         font = QFont(); font.setBold(True)
         lock_label.setFont(font)
         self.table.setItem(LOCK_ROW, COL_TASK, lock_label)
+        max_locked = max(self._locked_months) if self._locked_months else 0
         for m_idx in range(12):
             month = m_idx + 1
             is_locked = month in self._locked_months
+            # 잠금: 이전 월이 모두 잠겨야 잠금 가능 (순서대로)
+            # 해제: 마지막 잠긴 월만 해제 가능 (역순)
+            can_interact = (is_locked and month == max_locked) or \
+                           (not is_locked and month == max_locked + 1)
             btn = QPushButton("🔒" if is_locked else "🔓")
-            btn.setToolTip(f"{month}월 잠금 {'해제' if is_locked else '설정'}")
             if is_locked:
-                btn.setStyleSheet(
-                    "QPushButton { background-color: #b71c1c; color: white; "
-                    "font-size: 14px; border: none; }"
-                    "QPushButton:hover { background-color: #d32f2f; }"
-                )
+                if can_interact:
+                    btn.setToolTip(f"{month}월 잠금 해제")
+                    btn.setStyleSheet(
+                        "QPushButton { background-color: #b71c1c; color: white; "
+                        "font-size: 14px; border: none; }"
+                        "QPushButton:hover { background-color: #d32f2f; }"
+                    )
+                else:
+                    btn.setToolTip(f"{month}월 잠금됨 (마지막 잠긴 월부터 순서대로 해제)")
+                    btn.setStyleSheet(
+                        "QPushButton { background-color: #7f0000; color: #ef9a9a; "
+                        "font-size: 14px; border: none; }"
+                    )
+                    btn.setEnabled(False)
             else:
-                btn.setStyleSheet(
-                    "QPushButton { background-color: #37474f; color: #78909c; "
-                    "font-size: 14px; border: none; }"
-                    "QPushButton:hover { background-color: #455a64; color: #cfd8dc; }"
-                )
+                if can_interact:
+                    btn.setToolTip(f"{month}월 잠금 설정")
+                    btn.setStyleSheet(
+                        "QPushButton { background-color: #37474f; color: #78909c; "
+                        "font-size: 14px; border: none; }"
+                        "QPushButton:hover { background-color: #455a64; color: #cfd8dc; }"
+                    )
+                else:
+                    btn.setToolTip(f"{month}월 잠금 불가 (이전 월을 먼저 잠가야 함)")
+                    btn.setStyleSheet(
+                        "QPushButton { background-color: #263238; color: #546e7a; "
+                        "font-size: 14px; border: none; }"
+                    )
+                    btn.setEnabled(False)
             btn.clicked.connect(lambda checked, m=month: self._toggle_month_lock(m))
             self.table.setCellWidget(LOCK_ROW, COL_JAN + m_idx, btn)
 
@@ -231,10 +253,18 @@ class ExecutionWidget(QWidget):
                         task_locs = " / ".join(sorted(self._task_location_sets.get(task.id, set())))
                         cell = _loc_mismatch_item(task_locs)
                     elif month in self._locked_months:
-                        cell = _locked_item(f"{mm:.1f}" if mm else "")
+                        planned = plan_map.get((person.id, task.id, month), 0.0)
+                        if mm and abs(planned) < 1e-9:
+                            cell = _locked_unplanned_item(f"{mm:.1f}")
+                        else:
+                            cell = _locked_item(f"{mm:.1f}" if mm else "")
                     else:
-                        cell = QTableWidgetItem(f"{mm:.1f}" if mm else "")
-                        cell.setTextAlignment(Qt.AlignCenter)
+                        planned = plan_map.get((person.id, task.id, month), 0.0)
+                        if mm and abs(planned) < 1e-9:
+                            cell = _unplanned_exec_item(f"{mm:.1f}")
+                        else:
+                            cell = QTableWidgetItem(f"{mm:.1f}" if mm else "")
+                            cell.setTextAlignment(Qt.AlignCenter)
 
                     self.table.setItem(row, COL_JAN + m_idx, cell)
                     annual += mm
@@ -602,6 +632,27 @@ def _disabled_summary_item() -> QTableWidgetItem:
     item = QTableWidgetItem("")
     item.setFlags(Qt.ItemIsEnabled)
     item.setBackground(QBrush(QColor("#eceff1")))
+    return item
+
+
+def _locked_unplanned_item(text: str) -> QTableWidgetItem:
+    """잠긴 월 + 계획 없는 집행 셀 (황색 계열, 편집 불가)."""
+    item = QTableWidgetItem(text)
+    item.setTextAlignment(Qt.AlignCenter)
+    item.setFlags(Qt.ItemIsEnabled)
+    item.setBackground(QBrush(QColor("#e65100")))
+    item.setForeground(QBrush(QColor("#ffffff")))
+    item.setToolTip("🔒 계획 없는 집행 (잠긴 월)")
+    return item
+
+
+def _unplanned_exec_item(text: str) -> QTableWidgetItem:
+    """계획 없이 집행값이 입력된 셀 (황색 경고)."""
+    item = QTableWidgetItem(text)
+    item.setTextAlignment(Qt.AlignCenter)
+    item.setBackground(QBrush(QColor("#f57f17")))
+    item.setForeground(QBrush(QColor("#ffffff")))
+    item.setToolTip("⚠ 계획 없는 집행")
     return item
 
 
