@@ -10,15 +10,17 @@ def get_db_path() -> str:
     # PyInstaller 빌드 환경
     if getattr(sys, 'frozen', False):
         if sys.platform == 'darwin':
-            # macOS .app: sys.executable = .app/Contents/MacOS/binary
-            # .app 옆 폴더에 DB 저장 (MacOS -> Contents -> .app -> 부모 폴더)
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(sys.executable))))
+            # macOS: ~/Library/Application Support/MM_Manager/
+            base_dir = os.path.join(
+                os.path.expanduser("~"), "Library", "Application Support", "MM_Manager"
+            )
         else:
             # Windows: exe 옆에 저장
             base_dir = os.path.dirname(sys.executable)
     else:
         # 개발 환경: 프로젝트 루트
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    os.makedirs(base_dir, exist_ok=True)
     return os.path.join(base_dir, "mm_manager.db")
 
 
