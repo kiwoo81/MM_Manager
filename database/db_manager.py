@@ -1,12 +1,18 @@
 import sqlite3
 import os
+import sys
 import datetime
 from typing import List, Optional
 from .models import Task, Person, MMPlan, MMExecution, TaskLocationMM
 
 
 def get_db_path() -> str:
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # PyInstaller --onefile: sys.executable = 실행파일 경로
+    # 개발 환경: __file__ 기준 프로젝트 루트
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_dir, "mm_manager.db")
 
 

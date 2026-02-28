@@ -48,6 +48,8 @@ class ExecutionWidget(QWidget):
 
         top_bar = QHBoxLayout()
 
+        top_bar.addStretch()
+
         self.propose_btn = QPushButton("집행 제안")
         self.propose_btn.setToolTip("잠긴 월 다음 달의 집행 MM를 계획 기반으로 자동 제안합니다")
         self.propose_btn.setStyleSheet(
@@ -67,8 +69,6 @@ class ExecutionWidget(QWidget):
         )
         self.clear_unlocked_btn.clicked.connect(self._clear_unlocked_months)
         top_bar.addWidget(self.clear_unlocked_btn)
-
-        top_bar.addStretch()
 
         self.table = MMTableWidget()
         self.table.setEditTriggers(QAbstractItemView.AnyKeyPressed)
