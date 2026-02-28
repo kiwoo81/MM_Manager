@@ -86,25 +86,23 @@ class PlanWidget(QWidget):
         year = self.year
 
         plan_map = {}
-        for month in range(1, 13):
-            for p in self.db.get_plans_by_month(year, month):
-                plan_map[(p.person_id, p.task_id, month)] = p.planned_mm
+        for p in self.db.get_plans_by_year(year):
+            plan_map[(p.person_id, p.task_id, p.month)] = p.planned_mm
 
+        task_ids = [t.id for t in self._tasks]
         # 과제별 근무지 할당 MM: {task_id: {location: allocated_mm}}
-        task_loc_mms = {}
-        for t in self._tasks:
-            task_loc_mms[t.id] = {lm.location: lm.allocated_mm
-                                   for lm in self.db.get_task_location_mms(t.id)}
+        task_loc_mms = self.db.get_all_task_location_mms_bulk(task_ids)
 
         # 과제+근무지별 현재 계획 합계 캐시: {(task_id, location): total}
-        task_loc_totals = {}
-        for t in self._tasks:
-            for loc in task_loc_mms[t.id]:
-                task_loc_totals[(t.id, loc)] = self.db.get_task_location_plan_total(t.id, loc)
+        task_loc_totals = self.db.get_all_task_location_plan_totals_for_tasks(task_ids)
+
+        # 과제별 전체 계획 합계 (근무지 없는 과제용)
+        task_plan_totals = self.db.get_all_task_plan_totals_for_tasks(task_ids)
 
         n_tasks = len(self._tasks)
         n_persons = len(self._persons)
 
+        self.table.setUpdatesEnabled(False)
         self.table.blockSignals(True)
         self.table.clearSpans()
         self.table.setRowCount(0)
@@ -216,7 +214,7 @@ class PlanWidget(QWidget):
                         rem_item.setBackground(QBrush(QColor("#546e7a")))
                         rem_item.setForeground(QBrush(QColor("#ffffff")))
                 else:
-                    task_total_planned = self.db.get_task_plan_total(task.id)
+                    task_total_planned = task_plan_totals.get(task.id, 0.0)
                     remaining = task.total_mm - task_total_planned
                     rem_item = self._remaining_item(remaining, 0.0)
                     rem_item.setToolTip(
@@ -260,6 +258,7 @@ class PlanWidget(QWidget):
             row += 1
 
         self.table.blockSignals(False)
+        self.table.setUpdatesEnabled(True)
 
     # ──────────────────────────────────────────────────────────────────────────
 

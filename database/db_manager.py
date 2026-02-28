@@ -185,6 +185,14 @@ class DBManager:
 
     # ─── MM Plan ──────────────────────────────────────────────────────────────
 
+    def get_plans_by_year(self, year: int) -> List[MMPlan]:
+        """연도별 전체 MM 계획 일괄 조회 (12회 개별 호출 대체)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM mm_plan WHERE year=?", (year,)
+            ).fetchall()
+            return [MMPlan(**dict(r)) for r in rows]
+
     def get_plans_by_month(self, year: int, month: int) -> List[MMPlan]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -253,6 +261,14 @@ class DBManager:
 
     # ─── MM Execution ─────────────────────────────────────────────────────────
 
+    def get_executions_by_year(self, year: int) -> List[MMExecution]:
+        """연도별 전체 MM 집행 일괄 조회 (12회 개별 호출 대체)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM mm_execution WHERE year=?", (year,)
+            ).fetchall()
+            return [MMExecution(**dict(r)) for r in rows]
+
     def get_executions_by_month(self, year: int, month: int) -> List[MMExecution]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -316,6 +332,50 @@ class DBManager:
             return row[0]
 
     # ─── Task Location MM ─────────────────────────────────────────────────────
+
+    def get_all_task_location_mms_bulk(self, task_ids: list) -> dict:
+        """task_ids 목록에 대한 근무지별 할당 MM 일괄 조회. {task_id: {location: allocated_mm}}"""
+        if not task_ids:
+            return {}
+        placeholders = ",".join("?" * len(task_ids))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT task_id, location, allocated_mm FROM task_location_mm "
+                f"WHERE task_id IN ({placeholders}) ORDER BY id",
+                task_ids
+            ).fetchall()
+        result: dict = {}
+        for r in rows:
+            result.setdefault(r[0], {})[r[1]] = r[2]
+        return result
+
+    def get_all_task_location_plan_totals_for_tasks(self, task_ids: list) -> dict:
+        """task_ids의 {(task_id, location): total_planned_mm} 일괄 조회."""
+        if not task_ids:
+            return {}
+        placeholders = ",".join("?" * len(task_ids))
+        with self._connect() as conn:
+            rows = conn.execute(f"""
+                SELECT p.task_id, per.location, COALESCE(SUM(p.planned_mm), 0)
+                FROM mm_plan p
+                JOIN persons per ON per.id = p.person_id
+                WHERE p.task_id IN ({placeholders}) AND per.location != ''
+                GROUP BY p.task_id, per.location
+            """, task_ids).fetchall()
+        return {(r[0], r[1]): r[2] for r in rows}
+
+    def get_all_task_plan_totals_for_tasks(self, task_ids: list) -> dict:
+        """{task_id: total_planned_mm} 일괄 조회."""
+        if not task_ids:
+            return {}
+        placeholders = ",".join("?" * len(task_ids))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT task_id, COALESCE(SUM(planned_mm), 0) FROM mm_plan "
+                f"WHERE task_id IN ({placeholders}) GROUP BY task_id",
+                task_ids
+            ).fetchall()
+        return {r[0]: r[1] for r in rows}
 
     def get_task_location_mms(self, task_id: int) -> List[TaskLocationMM]:
         """과제의 근무지별 할당 MM 목록."""

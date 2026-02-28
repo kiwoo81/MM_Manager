@@ -72,24 +72,19 @@ class ExecutionWidget(QWidget):
         self._locked_months = self.db.get_locked_months(year)
 
         exec_map = {}  # (person_id, task_id, month) -> actual_mm
-        for month in range(1, 13):
-            for e in self.db.get_executions_by_month(year, month):
-                exec_map[(e.person_id, e.task_id, month)] = e.actual_mm
+        for e in self.db.get_executions_by_year(year):
+            exec_map[(e.person_id, e.task_id, e.month)] = e.actual_mm
 
         # 계획 데이터 로드
         plan_map = {}  # (person_id, task_id, month) -> planned_mm
-        for month in range(1, 13):
-            for p in self.db.get_plans_by_month(year, month):
-                plan_map[(p.person_id, p.task_id, month)] = p.planned_mm
+        for p in self.db.get_plans_by_year(year):
+            plan_map[(p.person_id, p.task_id, p.month)] = p.planned_mm
 
         active_task_ids = {t.id for t in self._tasks if t.status == '착수'}
 
         # 과제별 근무지 할당 MM: {task_id: {loc: allocated_mm}}
-        task_loc_mms: dict[int, dict[str, float]] = {}
-        for task in self._tasks:
-            locs = self.db.get_task_location_mms(task.id)
-            if locs:
-                task_loc_mms[task.id] = {lm.location: lm.allocated_mm for lm in locs}
+        task_ids = [t.id for t in self._tasks]
+        task_loc_mms: dict[int, dict[str, float]] = self.db.get_all_task_location_mms_bulk(task_ids)
         self._task_location_sets = {tid: set(locs.keys()) for tid, locs in task_loc_mms.items()}
 
         # 인력별 근무지
@@ -128,6 +123,7 @@ class ExecutionWidget(QWidget):
         n_persons = len(self._persons)
         n_summary_rows = (1 + len(all_locs) * 2) if all_locs else 0
 
+        self.table.setUpdatesEnabled(False)
         self.table.blockSignals(True)
         self.table.clearSpans()
         self.table.setRowCount(0)
@@ -441,6 +437,7 @@ class ExecutionWidget(QWidget):
                 row += 1
 
         self.table.blockSignals(False)
+        self.table.setUpdatesEnabled(True)
 
     # ──────────────────────────────────────────────────────────────────────────
 
