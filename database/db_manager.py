@@ -11,8 +11,8 @@ def get_db_path() -> str:
     if getattr(sys, 'frozen', False):
         if sys.platform == 'darwin':
             # macOS .app: sys.executable = .app/Contents/MacOS/binary
-            # .app 옆 폴더에 DB 저장 (Contents/MacOS -> Contents -> .app -> 부모)
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(sys.executable)))
+            # .app 옆 폴더에 DB 저장 (MacOS -> Contents -> .app -> 부모 폴더)
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(sys.executable))))
         else:
             # Windows: exe 옆에 저장
             base_dir = os.path.dirname(sys.executable)

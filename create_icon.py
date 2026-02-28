@@ -63,15 +63,32 @@ def create_icon(size):
 
 
 if __name__ == "__main__":
+    import subprocess
+    import shutil
+
     os.makedirs("assets", exist_ok=True)
 
-    # Pillow 네이티브 ICO 저장 (BMP 기반, Windows 탐색기 호환)
-    # 256x256 기준 이미지에서 각 사이즈로 리샘플링하여 저장
+    # Pillow 네이티브 ICO 저장 (Windows용)
     base = create_icon(256)
     sizes = [(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)]
-    base.save(
-        "assets/icon.ico",
-        format="ICO",
-        sizes=sizes
-    )
+    base.save("assets/icon.ico", format="ICO", sizes=sizes)
     print("아이콘 생성 완료: assets/icon.ico")
+
+    # macOS .icns 생성 (iconutil 사용)
+    iconset_dir = "assets/icon.iconset"
+    os.makedirs(iconset_dir, exist_ok=True)
+    icns_sizes = [16, 32, 64, 128, 256, 512]
+    for s in icns_sizes:
+        img = create_icon(s)
+        img.save(f"{iconset_dir}/icon_{s}x{s}.png")
+        img2 = create_icon(s * 2)
+        img2.save(f"{iconset_dir}/icon_{s}x{s}@2x.png")
+    result = subprocess.run(
+        ["iconutil", "-c", "icns", iconset_dir, "-o", "assets/icon.icns"],
+        capture_output=True, text=True
+    )
+    shutil.rmtree(iconset_dir)
+    if result.returncode == 0:
+        print("아이콘 생성 완료: assets/icon.icns")
+    else:
+        print(f"icns 생성 실패: {result.stderr}")
