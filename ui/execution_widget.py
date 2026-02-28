@@ -47,6 +47,27 @@ class ExecutionWidget(QWidget):
         layout = QVBoxLayout(self)
 
         top_bar = QHBoxLayout()
+
+        self.propose_btn = QPushButton("집행 제안")
+        self.propose_btn.setToolTip("잠긴 월 다음 달의 집행 MM를 계획 기반으로 자동 제안합니다")
+        self.propose_btn.setStyleSheet(
+            "QPushButton { background-color: #1565c0; color: white; font-weight: bold; "
+            "padding: 4px 12px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #0d47a1; }"
+        )
+        self.propose_btn.clicked.connect(self._propose_execution)
+        top_bar.addWidget(self.propose_btn)
+
+        self.clear_unlocked_btn = QPushButton("잠금 해제 월 초기화")
+        self.clear_unlocked_btn.setToolTip("잠기지 않은 모든 월의 집행 입력값을 삭제합니다")
+        self.clear_unlocked_btn.setStyleSheet(
+            "QPushButton { background-color: #b71c1c; color: white; font-weight: bold; "
+            "padding: 4px 12px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #7f0000; }"
+        )
+        self.clear_unlocked_btn.clicked.connect(self._clear_unlocked_months)
+        top_bar.addWidget(self.clear_unlocked_btn)
+
         top_bar.addStretch()
 
         self.table = MMTableWidget()
@@ -519,6 +540,155 @@ class ExecutionWidget(QWidget):
             f"{existing.actual_mm:.1f}" if existing else ""
         )
         self.table.blockSignals(False)
+
+    def _clear_unlocked_months(self):
+        """잠기지 않은 모든 월의 집행 입력값을 일괄 삭제."""
+        unlocked = [m for m in range(1, 13) if m not in self._locked_months]
+        if not unlocked:
+            QMessageBox.information(self.window(), "잠금 해제 월 초기화",
+                                    "모든 월이 잠겨 있어 삭제할 데이터가 없습니다.")
+            return
+
+        month_str = ", ".join(f"{m}월" for m in unlocked)
+        reply = QMessageBox.question(
+            self.window(), "잠금 해제 월 초기화",
+            f"아래 월의 집행 입력값을 모두 삭제합니다.\n\n{month_str}\n\n계속하시겠습니까?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.No:
+            return
+
+        self.db.delete_executions_for_months(self.year, unlocked)
+        self.refresh()
+        self.data_changed.emit()
+
+    def _propose_execution(self):
+        """잠긴 월 다음 달의 집행 MM를 계획 기반으로 자동 제안."""
+        # 1. 대상 월 결정
+        target_month = max(self._locked_months) + 1 if self._locked_months else 1
+        if target_month > 12:
+            QMessageBox.information(self.window(), "집행 제안", "모든 월이 잠겨 있어 제안할 월이 없습니다.")
+            return
+
+        year = self.year
+        active_task_ids = {t.id for t in self._tasks if t.status == '착수'}
+        if not active_task_ids:
+            QMessageBox.information(self.window(), "집행 제안", "착수 상태의 과제가 없습니다.")
+            return
+
+        # 2. 계획/집행 데이터 로드
+        plan_map = {}
+        for p in self.db.get_plans_by_year(year):
+            plan_map[(p.person_id, p.task_id, p.month)] = p.planned_mm
+
+        exec_map = {}
+        for e in self.db.get_executions_by_year(year):
+            exec_map[(e.person_id, e.task_id, e.month)] = e.actual_mm
+
+        # 3. 과제+근무지별 집행 합계 계산 (잔여 MM 계산용)
+        person_location = {p.id: p.location for p in self._persons}
+        task_loc_mms = self.db.get_all_task_location_mms_bulk([t.id for t in self._tasks])
+
+        task_loc_exec: dict = {}
+        for (pid, tid, m), val in exec_map.items():
+            loc = person_location.get(pid, "")
+            if loc:
+                task_loc_exec[(tid, loc)] = task_loc_exec.get((tid, loc), 0.0) + val
+
+        # 4. 인력별 제안 생성
+        proposals = []  # (person, task, month, mm)
+        person_map = {p.id: p for p in self._persons}
+        task_map = {t.id: t for t in self._tasks}
+
+        for person in self._persons:
+            p_loc = person.location
+
+            def _remaining(task):
+                """task+인력근무지 기준 잔여 MM 반환."""
+                loc_mm = task_loc_mms.get(task.id, {})
+                if p_loc and p_loc in loc_mm:
+                    return loc_mm[p_loc] - task_loc_exec.get((task.id, p_loc), 0.0)
+                task_exec_total = sum(
+                    v for (pid2, tid2, m2), v in exec_map.items() if tid2 == task.id
+                )
+                return task.total_mm - task_exec_total
+
+            def _loc_ok(task):
+                """인력 근무지가 과제 근무지 목록에 포함되는지 확인."""
+                if task.id in self._task_location_sets:
+                    return bool(p_loc) and p_loc in self._task_location_sets[task.id]
+                return True
+
+            # 이 인력의 target_month 계획 확인
+            # (착수 과제, 기간 내 과제, 근무지 일치, 미입력, 잔여 MM > 0 인 것만)
+            valid_plans = {}
+            for task in self._tasks:
+                if task.id not in active_task_ids:
+                    continue
+                if not task.in_range(year, target_month):
+                    continue
+                if not _loc_ok(task):
+                    continue
+                if exec_map.get((person.id, task.id, target_month), 0.0) != 0.0:
+                    continue
+                planned = plan_map.get((person.id, task.id, target_month), 0.0)
+                if planned > 0 and _remaining(task) > 0:
+                    valid_plans[task.id] = planned
+
+            if valid_plans:
+                # 계획이 있고 잔여 MM도 남아 있는 과제들 → 계획값 그대로 제안
+                for task_id, planned_mm in valid_plans.items():
+                    proposals.append((person, task_map[task_id], target_month, planned_mm))
+            else:
+                # 계획이 없거나 모두 초과된 경우 → 잔여 MM가 가장 많은 과제에 1.0 배정
+                best_task = None
+                best_remaining = 0.0
+                for task in self._tasks:
+                    if task.id not in active_task_ids:
+                        continue
+                    if not task.in_range(year, target_month):
+                        continue
+                    if not _loc_ok(task):
+                        continue
+                    if exec_map.get((person.id, task.id, target_month), 0.0) != 0.0:
+                        continue
+                    rem = _remaining(task)
+                    if rem > best_remaining:
+                        best_remaining = rem
+                        best_task = task
+
+                if best_task is not None:
+                    proposals.append((person, best_task, target_month, 1.0))
+
+        if not proposals:
+            QMessageBox.information(
+                self.window(), "집행 제안",
+                f"{target_month}월에 제안할 집행 데이터가 없습니다.\n"
+                "(이미 모두 입력됐거나 활성 과제가 없는 경우)"
+            )
+            return
+
+        # 5. 미리보기 다이얼로그
+        preview_lines = [f"[{target_month}월 집행 제안 내용]\n"]
+        for person, task, month, mm in proposals:
+            preview_lines.append(f"  {person.name}  /  {task.name}  →  {mm:.1f}MM")
+        preview_lines.append("\n위 내용으로 집행을 입력하시겠습니까?")
+
+        reply = QMessageBox.question(
+            self.window(), "집행 제안 확인",
+            "\n".join(preview_lines),
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.No:
+            return
+
+        # 6. DB 저장
+        for person, task, month, mm in proposals:
+            self.db.upsert_execution(
+                MMExecution(None, task.id, person.id, year, month, mm, "")
+            )
+        self.refresh()
+        self.data_changed.emit()
 
     def _toggle_month_lock(self, month: int):
         year = self.year

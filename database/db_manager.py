@@ -302,6 +302,17 @@ class DBManager:
                 (task_id, person_id, year, month)
             )
 
+    def delete_executions_for_months(self, year: int, months: list):
+        """지정한 월 목록의 집행 데이터를 일괄 삭제."""
+        if not months:
+            return
+        placeholders = ",".join("?" * len(months))
+        with self._connect() as conn:
+            conn.execute(
+                f"DELETE FROM mm_execution WHERE year=? AND month IN ({placeholders})",
+                [year] + list(months)
+            )
+
     def get_task_execution_total(self, task_id: int) -> float:
         with self._connect() as conn:
             row = conn.execute(

@@ -87,6 +87,18 @@ shiboken6 내부 재귀로 인해 세그폴트 발생.
 - 잠긴 월 + 계획 없는 집행: `#e65100` 진한 주황
 - 잠긴 월 + 계획 있는 집행: `#b0bec5` 회색
 
+### 집행 제안 버튼 (`_propose_execution`)
+- 대상 월: 마지막 잠긴 월 + 1 (잠긴 월 없으면 1월)
+- 조건: 착수 과제 + 과제 기간(`task.in_range`) 내 + 근무지 일치 + 미입력 + 잔여 MM > 0
+- 계획 있는 과제 → 계획값 그대로 제안
+- 계획 없거나 잔여 MM ≤ 0 → 잔여 MM가 가장 많은 과제에 1.0 배정
+- 미리보기 다이얼로그 후 Yes 시 일괄 저장
+
+### 잠금 해제 월 초기화 버튼 (`_clear_unlocked_months`)
+- 잠기지 않은 모든 월의 집행 데이터를 DB에서 일괄 삭제
+- `db.delete_executions_for_months(year, unlocked_months)` 호출
+- 확인 다이얼로그 후 Yes 시 삭제
+
 ### 요약 라벨 색상 규칙 (task_widget, person_widget 공통)
 - 근무지별 MM AND 총합 모두 일치 → `#e8f5e9` 초록
 - 하나라도 불일치 → `#fff3e0` 주황
