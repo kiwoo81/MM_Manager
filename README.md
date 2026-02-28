@@ -60,21 +60,39 @@ python main.py
 ```
 
 ### 빌드된 실행 파일 사용
-- macOS: `dist/MM_Manager.app` 더블클릭
-- 최초 실행 시 macOS Gatekeeper 경고가 뜨면 **Control+클릭 → 열기** 선택
 
-> **DB 파일**: 실행 파일 위치와 동일한 디렉토리에 `mm_manager.db`로 자동 생성됩니다.
+| 플랫폼 | 파일 | 실행 방법 |
+|--------|------|-----------|
+| Windows | `MM_Manager.exe` | 더블클릭 |
+| macOS | `MM_Manager.app` | 더블클릭 (최초 실행 시 Control+클릭 → 열기) |
 
-## 빌드 (macOS .app 생성)
+> **DB 파일**: 실행 파일과 같은 폴더에 `mm_manager.db`가 자동 생성됩니다.
+> - Windows: `MM_Manager.exe` 옆
+> - macOS: `MM_Manager.app` 옆 (앱 번들 외부)
 
+## 빌드
+
+### Windows (.exe)
 ```bash
-source .venv/bin/activate
-pip install pyinstaller
-python -m PyInstaller MM_Manager.spec --noconfirm
-# 결과물: dist/MM_Manager.app (약 97MB)
+venv\Scripts\activate
+pip install pyinstaller pillow
+python create_icon.py          # 아이콘 생성 (최초 1회)
+python -m PyInstaller --noconfirm --onefile --windowed --name "MM_Manager" ^
+  --icon "assets/icon.ico" ^
+  --add-data "database;database" --add-data "ui;ui" ^
+  --add-data "logic;logic" --add-data "assets;assets" main.py
+# 결과물: dist/MM_Manager.exe
 ```
 
-> Windows `.exe`는 Windows 환경에서 동일한 방법으로 빌드합니다.
+### macOS (.app)
+```bash
+source venv/bin/activate
+pip install pyinstaller
+python -m PyInstaller MM_Manager.spec --noconfirm
+# 결과물: dist/MM_Manager.app
+```
+
+> 크로스 컴파일 불가 — Windows 빌드는 Windows에서, macOS 빌드는 macOS에서.
 
 ## 기술 스택
 
@@ -112,8 +130,11 @@ python -m PyInstaller MM_Manager.spec --noconfirm
 ```
 MM_Manager/
 ├── main.py                  # 진입점
-├── MM_Manager.spec          # PyInstaller 빌드 설정
+├── MM_Manager.spec          # PyInstaller 빌드 설정 (macOS)
 ├── requirements.txt
+├── create_icon.py           # 아이콘 생성 스크립트
+├── assets/
+│   └── icon.ico             # 앱 아이콘
 ├── database/
 │   ├── db_manager.py        # SQLite CRUD
 │   └── models.py            # 데이터 모델 (Task, Person, MMPlan, MMExecution)

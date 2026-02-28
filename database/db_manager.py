@@ -7,11 +7,17 @@ from .models import Task, Person, MMPlan, MMExecution, TaskLocationMM
 
 
 def get_db_path() -> str:
-    # PyInstaller --onefile: sys.executable = 실행파일 경로
-    # 개발 환경: __file__ 기준 프로젝트 루트
+    # PyInstaller 빌드 환경
     if getattr(sys, 'frozen', False):
-        base_dir = os.path.dirname(sys.executable)
+        if sys.platform == 'darwin':
+            # macOS .app: sys.executable = .app/Contents/MacOS/binary
+            # .app 옆 폴더에 DB 저장 (Contents/MacOS -> Contents -> .app -> 부모)
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(sys.executable)))
+        else:
+            # Windows: exe 옆에 저장
+            base_dir = os.path.dirname(sys.executable)
     else:
+        # 개발 환경: 프로젝트 루트
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_dir, "mm_manager.db")
 

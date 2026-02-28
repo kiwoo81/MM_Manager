@@ -16,8 +16,12 @@ def main():
     app.setApplicationName("MM 관리 시스템")
     app.setStyle("Fusion")
 
-    # 아이콘 설정
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "icon.ico")
+    # 아이콘 설정 (frozen: _MEIPASS, 개발: 프로젝트 루트)
+    if getattr(sys, 'frozen', False):
+        assets_base = sys._MEIPASS
+    else:
+        assets_base = os.path.dirname(os.path.abspath(__file__))
+    icon_path = os.path.join(assets_base, "assets", "icon.ico")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
 

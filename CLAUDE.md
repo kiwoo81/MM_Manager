@@ -13,28 +13,51 @@ R&D 프로젝트의 인력 투입 공수(MM, Man/Month)를 계획하고 집행 �
 ## Python 실행 방법
 **항상 venv를 사용할 것.**
 ```bash
-# macOS
-/Users/kiwoo/Claude\ Projects/MM_Manager/.venv/bin/python main.py
+# Windows
+venv\Scripts\activate
+python main.py
 
-# 또는
-source .venv/bin/activate && python main.py
+# macOS
+source venv/bin/activate && python main.py
 ```
 
-## 빌드 방법 (macOS .app)
+## 빌드 방법
 ```bash
-source .venv/bin/activate
+# Windows (.exe)
+venv\Scripts\activate
+pip install pyinstaller
+python -m PyInstaller --noconfirm --onefile --windowed --name "MM_Manager" \
+  --icon "assets/icon.ico" \
+  --add-data "database;database" --add-data "ui;ui" \
+  --add-data "logic;logic" --add-data "assets;assets" main.py
+# 결과물: dist/MM_Manager.exe
+
+# macOS (.app) — macOS 환경에서 실행
+source venv/bin/activate
 python -m PyInstaller MM_Manager.spec --noconfirm
 # 결과물: dist/MM_Manager.app
 ```
-- Windows 실행 파일은 Windows 환경에서 별도 빌드 필요 (크로스 컴파일 불가)
-- DB 파일(mm_manager.db)은 실행 파일 옆에 생성됨
+- 크로스 컴파일 불가 (Windows exe는 Windows에서, macOS app은 macOS에서)
+- macOS 아이콘은 .ico 대신 .icns 필요 (spec 파일에서 지정)
+
+## DB 파일 위치
+| 환경 | 경로 |
+|------|------|
+| 개발 (python main.py) | 프로젝트 루트 `mm_manager.db` |
+| Windows 빌드 | `MM_Manager.exe` 옆 |
+| macOS 빌드 | `MM_Manager.app` 옆 (번들 외부) |
+
+구현: `database/db_manager.py`의 `get_db_path()` — `sys.frozen` + `sys.platform` 분기
 
 ## 프로젝트 구조
 ```
 MM_Manager/
 ├── main.py                  # 진입점
-├── MM_Manager.spec          # PyInstaller 빌드 설정
+├── MM_Manager.spec          # PyInstaller 빌드 설정 (macOS)
 ├── requirements.txt
+├── create_icon.py           # 아이콘 생성 스크립트 (Pillow)
+├── assets/
+│   └── icon.ico             # 앱 아이콘 (멀티사이즈: 16~256px)
 ├── database/
 │   ├── db_manager.py        # SQLite CRUD
 │   └── models.py            # Task, Person, MMPlan, MMExecution 데이터클래스
